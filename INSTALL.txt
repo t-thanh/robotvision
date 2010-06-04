@@ -1,0 +1,78 @@
+This file describes how to install the library "RobotVision". "RobotVision" has in 
+general a cross-platform design, but it is only tested on Linux with GCC.
+
+In the following, a detailed install description is given. We assume that RobotVison
+is already checked out using the following command:
+
+> svn co https://svn.openslam.org/data/svn/robotvision
+
+First, make sure that CMake is installed:
+
+> sudo apt-get install cmake 
+
+Then, install TooN. Make sure that you install the right version (10 April 2010
+version). 
+
+> cvs -z3 -d:pserver:anoncvs@cvs.savannah.nongnu.org:/cvsroot/toon co -D"10 April 2010" TooN
+> cd TooN
+> ./configure
+> sudo make install
+> cd ..
+
+For more details about TooN, please refer to: http://mi.eng.cam.ac.uk/~er258/cvd/index.html
+
+Install libCVD. Again, make sure that you install the right version (10 April 2010):
+
+> cvs -z3 -d:pserver:anoncvs@cvs.savannah.nongnu.org:/cvsroot/libcvd co -D"10 April 2010"  libcvd
+> cd libcvd
+> ./configure
+> make
+> sudo make install
+> cd ..
+
+libCVD might have additional dependencies. For more details how to install 
+libCVD, please refer to: http://mi.eng.cam.ac.uk/~er258/cvd/index.html
+
+Afterwards, install OpenCV 2.1.
+
+> wget http://sourceforge.net/projects/opencvlibrary/files/opencv-unix/2.1/OpenCV-2.1.0.tar.bz2/download
+> tar xvf OpenCV-2.1.0.tar.bz2
+> mkdir build
+> cd build
+> cmake ..
+> make
+> sudo make install
+> cd ../..
+
+The OpenCV dependency is optional. It is only used for visualisation purposes.
+To turn it off, set "OPENCV_SUPPORT" to "OFF" in 
+"robotvision/trunk/CMakeLists.txt".
+
+Now, download CSparse and copy its source files to RobotVision.
+
+> wget http://www.cise.ufl.edu/research/sparse/CSparse/CSparse.tar.gz
+> tar xvf CSparse.tar.gz
+> cp CSparse/Source/* robotvision/trunk/CSparse/
+> cp CSparse/Include/cs.h robotvision/trunk/CSparse/
+
+Finally, we can build RobotVision
+
+> cd robotvision/trunk
+> mkdir build
+> cd build
+> cmake ..
+> make 
+
+Now, you can run the demo application:
+
+> ./rss2010_demo 2
+
+For more details, please refer to "README.txt".
+
+If RobotVision should be used as a library, it can also be installed 
+system-wide:
+
+> sudo make install
+
+
+
