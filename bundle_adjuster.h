@@ -106,24 +106,30 @@ namespace RobotVision
 
 
   /**
-     *
-     * Bundle adjustment (BA) class using Levenberg-Marquardt (LM).
-     *
-     * The concrete implementation of LM is
-     * partially inspired by
-     * >M.I. A. Lourakis and A.A. Argyros, "The Design and Implementation
-     *  of a Generic Sparse Bundle Adjustment Software Package Based on
-     *  the Levenberg-Marquardt Algorithm", Technical Report, 2004.<
-     *
-     * Frame: How is the frame/pose represented? (e.g. SE3)
-     * FrameDoF: How many DoF has the pose/frame? (e.g. 6 DoF, that is
-     *           3 DoF translation, 3 DoF rotation)
-     * PointParNum: number of parameters to represent a point
-     *              (4 for a 3D homogenious point)
-     * PointDoF: DoF of a point (3 DoF for a 3D homogenious point)
-     * ObsDim: dimensions of observation (2 dim for (u,res) image
-     *         measurement)
-     */
+   *
+   * This class performs Bundle adjustment (BA) using Levenberg-Marquardt (LM)
+   * as described in
+   *
+   * > H. Strasdat, J.M.M. Montiel, A.J. Davison:
+   *   "Scale Drift-Aware Large Scale Monocular SLAM",
+   *   Proc. of Robotics: Science and Systems (RSS),
+   *   Zaragoza, Spain, 2010.
+   *   http://www.roboticsproceedings.org/rss06/p10.html <
+   *
+   * The concrete implementation/notation of LM is partially inspired by
+   * >M.I. A. Lourakis and A.A. Argyros, "The Design and Implementation
+   *  of a Generic Sparse Bundle Adjustment Software Package Based on
+   *  the Levenberg-Marquardt Algorithm", Technical Report, 2004.<
+   *
+   * Frame: How is the frame/pose represented? (e.g. SE3)
+   * FrameDoF: How many DoF has the pose/frame? (e.g. 6 DoF, that is
+   *           3 DoF translation, 3 DoF rotation)
+   * PointParNum: number of parameters to represent a point
+   *              (4 for a 3D homogenious point)
+   * PointDoF: DoF of a point (3 DoF for a 3D homogenious point)
+   * ObsDim: dimensions of observation (2 dim for (u,res) image
+   *         measurement)
+   */
   template <typename Frame,
   int FrameDof,
   int PointParNum,
@@ -147,8 +153,20 @@ namespace RobotVision
     int verbose;
 
     /**
-          * perform full BA over points and frames
-          */
+     * perform full BA over points and frames
+     *
+     * frame_list: set of poses/frames
+     * point_list: set of 3D points/landmarks
+     * prediction: prediction class
+     * obs_vec: set of observations
+     * num_fix_frames: number of frames fixed during observations
+     *                 (normally 1, the origin)
+     * num_fix_points: number of points fixed (normally 0)
+     * ba_params: BA parameters
+     * alternation: use approximative, but very fast optimisation by using
+     *              alternation between points and frames
+     *              (normally not good, because of very slow convergence rate)
+     */
     void calcFull(std::vector<Frame > & frame_list,
                   _PointVec & point_list,
                   _AbsJac & prediction,
@@ -528,9 +546,16 @@ namespace RobotVision
     }
 
     /**
-      * Struture-only BA
-      *- optimise only wrt. to points and keep frames/poses fixed
-      */
+     * Struture-only BA
+     *- optimise only wrt. to points and keep frames/poses fixed
+     *
+     * frame_list: set of poses/frames
+     * point_list: set of 3D points/landmarks
+     * prediction: prediction class
+     * obs_vec: set of observations
+     * num_fix_points: number of points fixed (normally 0)
+     * ba_params: BA parameters
+     */
     void calcStructOnly(std::vector<Frame > & frame_list,
                         _PointVec & point_list,
                         _AbsJac & prediction,
@@ -715,9 +740,17 @@ namespace RobotVision
 
 
     /**
-      * Motion-only BA
-      * - optimise only wrt. to frames/poses and keep points fixed
-      */
+     * Motion-only BA
+     * - optimise only wrt. to frames/poses and keep points fixed
+     *
+     * frame_list: set of poses/frames
+     * point_list: set of 3D points/landmarks
+     * prediction: prediction class
+     * obs_vec: set of observations
+     * num_fix_frames: number of frames fixed during observations
+     *                 (normally 0)
+     * ba_params: BA parameters
+     */
     void calcMotionOnly(std::vector<Frame > & frame_list,
                         _PointVec & point_list,
                         _AbsJac & prediction,
@@ -910,8 +943,25 @@ namespace RobotVision
 
 
 
-
-    /** filter a single feature given known frame/pose */
+    /**
+     * This function implements an information filter for a single landmark
+     * given known frame/pose. It can be used for a landmark initialisation
+     * (without any depth prior) within a key-frame BA apporach as described
+     * in:
+     *
+     * > H. Strasdat, J.M.M. Montiel, A.J. Davison:
+     *   "Scale Drift-Aware Large Scale Monocular SLAM",
+     *   Proc. of Robotics: Science and Systems (RSS),
+     *   Zaragoza, Spain, 2010.
+     *   http://www.roboticsproceedings.org/rss06/p10.html <
+     *
+     * frame: pose/frame
+     * point: 3D point/landmark (normally in inverse depth coordinates)
+     * Lambda: 3D point/landmark inverse covariance
+     * prediction: prediction class
+     * obs_vec: set of observations
+     * ba_params: BA parameters
+     */
     void filterSingleFeatureOnly(Frame & frame,
                                  TooN::Vector<PointParNum>  & point,
                                  TooN::Matrix<PointDof,PointDof> & Lambda,
@@ -1114,7 +1164,7 @@ namespace RobotVision
     }
 
 
-    /** residual function using inverse uncertainty Lambda*/
+    /** residual function using inverse observation uncertainty Lambda*/
     double getResidual(const std::vector<Frame > & frame_list,
                        const _PointVec & point_list,
                        const _AbsJac & prediction,
@@ -1237,7 +1287,7 @@ namespace RobotVision
     }
 
 
-    /** icremental updates of points */
+    /** incremental updates of points */
     void addToPoints(const _PointVec & point_list,
                      const TooN::Vector<> & delta,
                      const _AbsJac & prediction,
@@ -1259,7 +1309,7 @@ namespace RobotVision
     }
 
 
-    /** icremental updates of frames */
+    /** incremental updates of frames */
     void addToFrames(const std::vector<Frame > & frame_list,
                      const TooN::Vector<> & delta,
                      const _AbsJac & prediction,

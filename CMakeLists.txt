@@ -73,6 +73,7 @@ LINK_LIBRARIES (${PROJECT_NAME} ${LIBS})
 ADD_LIBRARY (${PROJECT_NAME} SHARED ${SOURCES} )
 
 ADD_EXECUTABLE(rss2010_demo rss2010_demo.cpp)
+ADD_EXECUTABLE(ba_demo ba_demo.cpp)
 
 # Install all .h and .hpp files
 INSTALL(DIRECTORY ./ DESTINATION include/${PROJECT_NAME}

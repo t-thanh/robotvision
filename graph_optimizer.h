@@ -42,8 +42,16 @@ namespace RobotVision
 
 
 {
-  /** Compare two monocular SLAM trajctories (SE3) by minimising their
-      *  difference wrt. the ambigious scale factor s. */
+  /**
+   * Compare two monocular SLAM trajctories (SE3) by minimising their
+   * difference wrt. the ambigious scale factor s as descibed in
+   *
+   * > H. Strasdat, J.M.M. Montiel, A.J. Davison:
+   *   "Scale Drift-Aware Large Scale Monocular SLAM",
+   *   Proc. of Robotics: Science and Systems (RSS),
+   *   Zaragoza, Spain, 2010.
+   *   http://www.roboticsproceedings.org/rss06/p10.html <
+   */
   class SE3CompareModScale
   {
   public:
@@ -236,19 +244,21 @@ namespace RobotVision
 
 
   /** This class perfoms pose-graph optimisation as described in
-      * >H. Strasdat, J.M.M. Montiel, A.J. Davison: "Scale Drift-Aware
-      *  Large Scale Monocular SLAM", Proc. of Robotics: Science and
-      *  Systems (RSS), 2010.<
-      *
-      * The concrete implementation of Levenberg-Marquardt (LM) is
-      * partially inspired by
-      * >M.I. A. Lourakis and A.A. Argyros, "The Design and Implementation
-      *  of a Generic Sparse Bundle Adjustment Software Package Based on
-      *  the Levenberg-Marquardt Algorithm", Technical Report, 2004.<
-      *
-      * Trans: pose transformation (e.g. SE2, SE3, Sim3...)
-      * TrandDoF: DoF of the corresponding transformation
-      */
+   *
+   * > H. Strasdat, J.M.M. Montiel, A.J. Davison:
+   *   "Scale Drift-Aware Large Scale Monocular SLAM",
+   *   Proc. of Robotics: Science and Systems (RSS),
+   *   Zaragoza, Spain, 2010.
+   *   http://www.roboticsproceedings.org/rss06/p10.html <
+   *
+   * The concrete implementation/notation of LM is partially inspired by
+   * >M.I. A. Lourakis and A.A. Argyros, "The Design and Implementation
+   *  of a Generic Sparse Bundle Adjustment Software Package Based on
+   *  the Levenberg-Marquardt Algorithm", Technical Report, 2004.<
+   *
+   * Trans: pose transformation (e.g. SE2, SE3, Sim3...)
+   * TrandDoF: DoF of the corresponding transformation
+   */
   template <typename Trans, int TransDoF> class GraphOptimizer
   {
     typedef std::list<Constraint<Trans,TransDoF> >
@@ -260,13 +270,14 @@ namespace RobotVision
     }
 
     /** performs the pose-graph optimisation using LM
-          * trans_vec: set of absolute pose transformations
-          * contraint_list: set of relative pose-pose contraints
-          * num_fix_trans: number of fixed transformations
-          * num_iter: maximal number of iterations
-          * mu: initial LM parameter which interpolates between
-          *     Gauss-Newton (0) and gradient descent (infinity)
-          */
+     *
+     * trans_vec: set of absolute pose transformations
+     * contraint_list: set of relative pose-pose contraints
+     * num_fix_trans: number of fixed transformations
+     * num_iter: maximal number of iterations
+     * mu: initial LM parameter which interpolates between
+     *     Gauss-Newton (0) and gradient descent (infinity)
+     */
     void optimize(std::vector<Trans> & trans_vec,
                   const std::list<Constraint<Trans, TransDoF> >
                   & constraint_list,

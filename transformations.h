@@ -43,7 +43,7 @@ namespace RobotVision
   }
 
   /** point transformation function using 3D similarity transformation
-      * Sim3 */
+   * Sim3 */
   template <class A> inline TooN::Vector<3>
       transform(const RobotVision::Sim3<A>& T, const TooN::Vector<3,A>& x)
   {
@@ -52,16 +52,16 @@ namespace RobotVision
 
 
   /**
-     * Abstract prediction class
-     * Frame: How is the frame/pose represented? (e.g. SE3)
-     * FrameDoF: How many DoF has the pose/frame? (e.g. 6 DoF, that is
-     *           3 DoF translation, 3 DoF rotation)
-     * PointParNum: number of parameters to represent a point
-     *              (4 for a 3D homogenious point)
-     * PointDoF: DoF of a point (3 DoF for a 3D homogenious point)
-     * ObsDim: dimensions of observation (2 dim for (u,v) image
-     *         measurement)
-     */
+   * Abstract prediction class
+   * Frame: How is the frame/pose represented? (e.g. SE3)
+   * FrameDoF: How many DoF has the pose/frame? (e.g. 6 DoF, that is
+   *           3 DoF translation, 3 DoF rotation)
+   * PointParNum: number of parameters to represent a point
+   *              (4 for a 3D homogenious point)
+   * PointDoF: DoF of a point (3 DoF for a 3D homogenious point)
+   * ObsDim: dimensions of observation (2 dim for (u,v) image
+   *         measurement)
+   */
   template <typename Frame,
   int FrameDoF,
   int PointParNum,
@@ -72,7 +72,7 @@ namespace RobotVision
   public:
 
     /** Map a world point x into the camera/sensor coordinate frame T
-          * and create an observation*/
+     * and create an observation*/
     virtual TooN::Vector<ObsDim>
         map(const Frame & T,
             const TooN::Vector<PointParNum> & x) const = 0;
@@ -86,7 +86,7 @@ namespace RobotVision
       TooN::Matrix<ObsDim,FrameDoF> J_pose  = TooN::Zeros;
 
       TooN::Vector<ObsDim>  fun = map(T,x);
-      for (uint i=0; i<FrameDoF; ++i)
+      for (unsigned int i=0; i<FrameDoF; ++i)
       {
         TooN::Vector<FrameDoF> eps = TooN::Zeros;
         eps[i] = h;
@@ -104,7 +104,7 @@ namespace RobotVision
       double h = 0.000000000001;
       TooN::Matrix<ObsDim,PointDoF> J_x  = TooN::Zeros;
       TooN::Vector<ObsDim> fun = map(T,x);
-      for (uint i=0; i<PointDoF; ++i)
+      for (unsigned int i=0; i<PointDoF; ++i)
       {
         TooN::Vector<PointDoF> eps = TooN::Zeros;
         eps[i] = h;
@@ -133,7 +133,7 @@ namespace RobotVision
 
 
   /** abstract prediction class dependig on
-      * 3D rigid body transformations SE3 */
+   * 3D rigid body transformations SE3 */
   template <int PointParNum, int PointDoF, int ObsDim>
       class SE3_AbstractPoint
         : public AbstractPrediction<TooN::SE3<>,6,PointParNum,PointDoF,ObsDim>
@@ -164,7 +164,7 @@ namespace RobotVision
 
 
   /** abstract prediction class dependig on
-      * 2D rigid body transformations SE2 */
+   * 2D rigid body transformations SE2 */
   template <int PointParNum, int PointDoF, int ObsDim>
       class SE2_AbstractPoint
         : public AbstractPrediction<TooN::SE2<>,3,PointParNum,PointDoF,ObsDim>
@@ -242,7 +242,10 @@ namespace RobotVision
     {
       TooN::Matrix<2,6> J_frame;
 
-      /** Following Ethan Eade's Phd thesis */
+      /**
+        * Jacobians as described in Ethan Eade's Phd thesis:
+        * http://mi.eng.cam.ac.uk/~ee231/thesis_revised.pdf , Appendix A
+        */
       TooN::Vector<3> xyz_trans = T.get_rotation()*xyz + T.get_translation();
 
       double x = xyz_trans[0];
@@ -263,7 +266,10 @@ namespace RobotVision
                                const TooN::Vector<3> & xyz) const
     {
 
-      /** Following Ethan Eade's Phd thesis */
+      /**
+        * Jacobians as described in Ethan Eade's Phd thesis:
+        * http://mi.eng.cam.ac.uk/~ee231/thesis_revised.pdf , Appendix A
+        */
       TooN::Vector<3> xyz_trans = T.get_rotation()*xyz + T.get_translation();
 
       double x = xyz_trans[0];
@@ -317,7 +323,10 @@ namespace RobotVision
       TooN::Matrix<2,6> J_frame;
       TooN::Vector<3> xyz = 1./uvq[2]*TooN::makeVector(uvq[0],uvq[1],1);
 
-      /** Following Ethan Eade's Phd thesis */
+      /**
+        * Jacobians as described in Ethan Eade's Phd thesis:
+        * http://mi.eng.cam.ac.uk/~ee231/thesis_revised.pdf , Appendix A
+        */
       TooN::Vector<3> xyz_trans = T.get_rotation()*xyz + T.get_translation();
 
       double x = xyz_trans[0];
@@ -341,7 +350,11 @@ namespace RobotVision
 
       const TooN::Matrix<3,3> & R = T.get_rotation().get_matrix();
 
-      /** Following Ethan Eade's Phd thesis */
+
+      /**
+        * Jacobians as described in Ethan Eade's Phd thesis:
+        * http://mi.eng.cam.ac.uk/~ee231/thesis_revised.pdf , Appendix A
+        */
       TooN::Vector<3> xyz_trans = R*xyz + T.get_translation();
 
       double x = xyz_trans[0];
@@ -415,16 +428,18 @@ namespace RobotVision
       class AbstractConFun{
       public:
 
-    /** difference function betwen two absolute transformations T1, T2
-      * and a relatibe contraint C (residual in optimisation)
-      */
+    /**
+     * difference function betwen two absolute transformations T1, T2
+     * and a relative contraint C
+     */
     virtual TooN::Vector<TransDoF> diff(const Trans & T1,
                                         const Trans& C,
                                         const Trans & T2) const = 0;
 
-    /** Jacobian wrt. to the first constraint T1
-      * use nummerical Jacobian as default
-      */
+    /**
+     * Jacobian wrt. to the first constraint T1
+     * use nummerical Jacobian as default
+     */
     virtual TooN::Matrix<TransDoF,TransDoF> d_diff_dT1(const Trans & T1,
                                                        const Trans& C,
                                                        const Trans & T2)const
@@ -433,7 +448,7 @@ namespace RobotVision
       TooN::Matrix<TransDoF> J  = TooN::Zeros;
       TooN::Vector<TransDoF> fun = diff(T1,C,T2);
 
-      for (uint i=0; i<TransDoF; ++i)
+      for (unsigned int i=0; i<TransDoF; ++i)
       {
         TooN::Vector<TransDoF> eps = TooN::Zeros;
         eps[i] = h;
@@ -442,9 +457,10 @@ namespace RobotVision
       return J;
     }
 
-    /** Jacobian wrt. to the second t constraint T2
-          * use nummerical Jacobian as default
-          */
+    /**
+     * Jacobian wrt. to the second t constraint T2
+     * use nummerical Jacobian as default
+     */
     virtual TooN::Matrix<TransDoF,TransDoF> d_diff_dT2(const Trans & T1,
                                                        const Trans& C,
                                                        const Trans & T2)const
@@ -453,7 +469,7 @@ namespace RobotVision
       TooN::Matrix<TransDoF> J  = TooN::Zeros;
       TooN::Vector<TransDoF> fun = diff(T1,C,T2);
 
-      for (uint i=0; i<TransDoF; ++i)
+      for (unsigned int i=0; i<TransDoF; ++i)
       {
         TooN::Vector<TransDoF> eps = TooN::Zeros;
         eps[i] = h;
@@ -472,40 +488,44 @@ namespace RobotVision
   {
 
     /** logarithic map of 3D rotation group So3 */
-    TooN::Vector<3> ln_so3(const TooN::Matrix<3> & R)
+    template <typename P>
+        TooN::Vector<3,P> ln_so3(const TooN::Matrix<3,3,P> & R)
     {
-      double d = 0.5*(R(0,0)+R(1,1)+R(2,2)-1);
-      TooN::Vector<3> omega;
+      P d = 0.5*(R(0,0)+R(1,1)+R(2,2)-1);
+      TooN::Vector<3,P> omega;
       if (d>0.99999)
       {
         omega=0.5*deltaR(R);
       }
       else
       {
-        double theta = acos(d);
+        P theta = acos(d);
         omega = theta/(2*sqrt(1-d*d))*deltaR(R);
       }
       return omega;
     }
 
     /** logarithic map of 3D pseudo rigid transformation group <So3,R3>*/
-    TooN::Vector<6> ln_so3xR3(const TooN::SE3<> & T)
+    template <typename P>
+        TooN::Vector<6,P> ln_so3xR3(const TooN::SE3<P> & T)
     {
-      TooN::Vector<6> res;
-      res.slice<0,3>() = ln_so3(T.get_rotation().get_matrix());
-      res.slice<3,3>() = T.get_translation();
+      TooN::Vector<6,P> res;
+      res.template slice<0,3>() = ln_so3(T.get_rotation().get_matrix());
+      res.template slice<3,3>() = T.get_translation();
       return res;
     }
 
     /** logarithic map of 3D rigid transformation group Se3*/
-    TooN::Vector<6> ln(const TooN::Matrix<3> &R, const TooN::Vector<3> & t)
+    template <typename P>
+        TooN::Vector<6,P> ln(const TooN::Matrix<3,3,P> &R,
+                             const TooN::Vector<3> & t)
     {
-      TooN::Vector<6> v;
-      TooN::Vector <3> omega;
-      TooN::Matrix <3> Omega;
-      TooN::Matrix <3> V_inv;
+      TooN::Vector<6,P> v;
+      TooN::Vector <3,P> omega;
+      TooN::Matrix <3,3,P> Omega;
+      TooN::Matrix <3,3,P> V_inv;
 
-      double d = 0.5*( R(0,0)+R(1,1)+R(2,2)-1);
+      P d = 0.5*( R(0,0)+R(1,1)+R(2,2)-1);
 
       if (d>0.99999)
       {
@@ -515,7 +535,7 @@ namespace RobotVision
       }
       else
       {
-        double theta = acos(d);
+        P theta = acos(d);
         omega = theta/(2*sqrt(1-d*d))*deltaR(R);
         Omega = skew(omega);
         V_inv
@@ -523,12 +543,14 @@ namespace RobotVision
               - 0.5*Omega
               + (1-theta/(2*tan(theta/2)))/(theta*theta)*(Omega*Omega);
       }
-      v.slice<0,3>() = omega;
-      v.slice<3,3>() = V_inv*t;
+      v.template slice<0,3>() = omega;
+      v.template slice<3,3>() = V_inv*t;
       return v;
     }
 
-    TooN::Matrix<3,9> M3x9(TooN::Vector<3> & a, TooN::Matrix<3> & B)
+    template <typename P>
+        TooN::Matrix<3,9,P> M3x9(TooN::Vector<3,P> & a,
+                                 TooN::Matrix<3,3,P> & B)
     {
       TooN::Matrix<3,9> J;
       J.T()[0] = a;
@@ -543,14 +565,15 @@ namespace RobotVision
       return J;
     }
 
-    TooN::Matrix<3,9> dlnR_dR(const TooN::Matrix<3,3> & R)
+    template <typename P>
+        TooN::Matrix<3,9,P> dlnR_dR(const TooN::Matrix<3,3,P> & R)
     {
 
 
-      double d = 0.5*(R(0,0)+R(1,1)+R(2,2)-1);
+      P d = 0.5*(R(0,0)+R(1,1)+R(2,2)-1);
 
-      TooN::Vector<3> a ;
-      TooN::Matrix<3,3> B;
+      TooN::Vector<3,P> a ;
+      TooN::Matrix<3,3,P> B;
       if(d>0.99999)
       {
         a = TooN::makeVector(0,0,0);
@@ -558,21 +581,22 @@ namespace RobotVision
       }
       else
       {
-        double theta = acos(d);
-        double d2 = d*d;
-        double sq = sqrt(1-d2);
+        P theta = acos(d);
+        P d2 = d*d;
+        P sq = sqrt(1-d2);
         a = (d*theta-sq)/(4*Po3(sq))*deltaR(R);
         B = -theta/(2*sq)*TooN::Identity(3);
       }
       return M3x9(a,B);
     }
 
-    TooN::Matrix<3> ddeltaRt_dR(const TooN::SE3<> & T)
+    template <typename P>
+        TooN::Matrix<3,3,P> ddeltaRt_dR(const TooN::SE3<P> & T)
     {
-      TooN::Matrix<3> J;
-      TooN::Matrix<3> R = T.get_rotation().get_matrix();
-      TooN::Vector<3> t = T.get_translation();
-      TooN::Vector<3> abc = deltaR(R);
+      TooN::Matrix<3,3,P> J;
+      TooN::Matrix<3,3,P> R = T.get_rotation().get_matrix();
+      TooN::Vector<3,P> t = T.get_translation();
+      TooN::Vector<3,P> abc = deltaR(R);
       double a = abc[0];
       double b = abc[1];
       double c = abc[2];
@@ -584,13 +608,14 @@ namespace RobotVision
       return J;
     }
 
-    TooN::Matrix<3,9> dVinvt_dR(const TooN::SE3<> & T)
+    template <typename P>
+        TooN::Matrix<3,9,P> dVinvt_dR(const TooN::SE3<P> & T)
     {
-      TooN::Vector<3> a;
-      TooN::Matrix<3,3> B;
+      TooN::Vector<3,P> a;
+      TooN::Matrix<3,3,P> B;
 
-      TooN::Matrix<3> R = T.get_rotation().get_matrix();
-      TooN::Vector<3> t = T.get_translation();
+      TooN::Matrix<3,3,P> R = T.get_rotation().get_matrix();
+      TooN::Vector<3,P> t = T.get_translation();
 
       double d = 0.5*( R(0,0)+R(1,1)+R(2,2)-1);
 
@@ -601,14 +626,14 @@ namespace RobotVision
       }
       else
       {
-        double theta = acos(d);
-        double theta2 = theta*theta;
-        double oned2 = (1-d*d);
-        double sq = sqrt(oned2);
-        double cot = 1./tan(0.5*theta);
-        double csc2 = Po2(1./sin(0.5*theta));
+        P theta = acos(d);
+        P theta2 = theta*theta;
+        P oned2 = (1-d*d);
+        P sq = sqrt(oned2);
+        P cot = 1./tan(0.5*theta);
+        P csc2 = Po2(1./sin(0.5*theta));
 
-        TooN::Matrix<3> skewR = skew(deltaR(R));
+        TooN::Matrix<3,3,P> skewR = skew(deltaR(R));
         a = -(d*theta-sq)/(8*Po3(sq))*skewR*t
             + (((theta*sq-d*theta2)*(0.5*theta*cot-1))
                -theta*sq*((0.25*theta*cot)+0.125*theta2*csc2-1))
@@ -620,17 +645,18 @@ namespace RobotVision
     }
 
     /** Jacobian of SE3 logarithmic map wrt. T */
-    TooN::Matrix<6,12> dlnT_dT(const TooN::SE3<> & T)
+    template <typename P>
+        TooN::Matrix<6,12,P> dlnT_dT(const TooN::SE3<P> & T)
     {
-      TooN::Matrix<6,12> J = TooN::Zeros;
-      J.slice<0,0,3,9>() = dlnR_dR(T.get_rotation().get_matrix());
-      J.slice<3,0,3,9>() = dVinvt_dR(T);
+      TooN::Matrix<6,12,P> J = TooN::Zeros;
+      J.template slice<0,0,3,9>() = dlnR_dR(T.get_rotation().get_matrix());
+      J.template slice<3,0,3,9>() = dVinvt_dR(T);
 
-      TooN::Matrix<3> R = T.get_rotation().get_matrix();
-      TooN::Vector <3> omega;
-      TooN::Matrix <3> Omega;
-      TooN::Matrix <3> V_inv;
-      double d = 0.5*( R(0,0)+R(1,1)+R(2,2)-1);
+      TooN::Matrix<3,3,P> R = T.get_rotation().get_matrix();
+      TooN::Vector <3,P> omega;
+      TooN::Matrix <3,3,P> Omega;
+      TooN::Matrix <3,3,P> V_inv;
+      P d = 0.5*( R(0,0)+R(1,1)+R(2,2)-1);
       if (d>0.99999)
       {
         omega = 0.5*deltaR(R);
@@ -639,68 +665,71 @@ namespace RobotVision
       }
       else
       {
-        double theta = acos(d);
+        P theta = acos(d);
         omega = theta/(2*sqrt(1-d*d))*deltaR(R);
         Omega = skew(omega);
         V_inv = TooN::Identity(3)
                 - 0.5*Omega
                 + (1-theta/(2*tan(theta/2)))/(theta*theta)*(Omega*Omega);
       }
-      J.slice<3,9,3,3>() = V_inv;
+      J.template slice<3,9,3,3>() = V_inv;
       return J;
     }
 
     /** Jacobain of incremenal update 'exp(delta)T' wrt. delta*/
-    TooN::Matrix<12,6> dexp_x_T_ddelta(const TooN::SE3<> & T)
+    template <typename P>
+        TooN::Matrix<12,6,P> dexp_x_T_ddelta(const TooN::SE3<P> & T)
     {
-      TooN::Matrix<12,6> J = TooN::Zeros;
-      TooN::Matrix<3,3> R = T.get_rotation().get_matrix();
-      TooN::Vector<3> t = T.get_translation();
-      J.slice<0,3,3,3>() = -skew(R.T()[0]);
-      J.slice<3,3,3,3>() = -skew(R.T()[1]);
-      J.slice<6,3,3,3>() = -skew(R.T()[2]);
-      J.slice<9,3,3,3>() = -skew(t);
-      J.slice<9,0,3,3>() = TooN::Identity;
+      TooN::Matrix<12,6,P> J = TooN::Zeros;
+      TooN::Matrix<3,3,P> R = T.get_rotation().get_matrix();
+      TooN::Vector<3,P> t = T.get_translation();
+      J.template slice<0,3,3,3>() = -skew(R.T()[0]);
+      J.template slice<3,3,3,3>() = -skew(R.T()[1]);
+      J.template slice<6,3,3,3>() = -skew(R.T()[2]);
+      J.template slice<9,3,3,3>() = -skew(t);
+      J.template slice<9,0,3,3>() = TooN::Identity;
 
       return J;
     }
 
     /** Jacobain of 'diff' wrt. first transformation T1 */
-    TooN::Matrix<12,12> dDiff_dT1(const TooN::SE3<> & Tc,
-                                  const TooN::SE3<> & T2)
+    template <typename P>
+        TooN::Matrix<12,12,P> dDiff_dT1(const TooN::SE3<P> & Tc,
+                                        const TooN::SE3<P> & T2)
     {
-      TooN::Matrix<12,12> J = TooN::Zeros;
-      TooN::Matrix<3,3> R2 = T2.get_rotation().get_matrix();
-      TooN::Matrix<3,3> Rc = Tc.get_rotation().get_matrix();
-      TooN::Vector<3> t2 = T2.get_translation();
-      J.slice<0,0,9,9>() = kron(R2,Rc);
-      J.slice<9,0,3,9>() = kron(-(R2.T()*t2.as_col()).T(),Rc);
-      J.slice<9,9,3,3>() = Rc;
+      TooN::Matrix<12,12,P> J = TooN::Zeros;
+      TooN::Matrix<3,3,P> R2 = T2.get_rotation().get_matrix();
+      TooN::Matrix<3,3,P> Rc = Tc.get_rotation().get_matrix();
+      TooN::Vector<3,P> t2 = T2.get_translation();
+      J.template slice<0,0,9,9>() = kron(R2,Rc);
+      J.template slice<9,0,3,9>() = kron(-(R2.T()*t2.as_col()).T(),Rc);
+      J.template slice<9,9,3,3>() = Rc;
 
       return J;
     }
 
     /** Jacobain of 'diff' wrt. second transformation T2 */
-    TooN::Matrix<12,12> dDiff_dT2(const TooN::SE3<> & T1,
-                                  const TooN::SE3<> & Tc,
-                                  const TooN::SE3<> & T2)
+    template <typename P>
+        TooN::Matrix<12,12,P> dDiff_dT2(const TooN::SE3<P> & T1,
+                                        const TooN::SE3<P> & Tc,
+                                        const TooN::SE3<P> & T2)
     {
-      TooN::Matrix<12,12> J = TooN::Zeros;
-      TooN::Matrix<3,3> R = T1.get_rotation().get_matrix();
-      TooN::Matrix<3,3> R2 = T2.get_rotation().get_matrix();
-      TooN::Matrix<3,3> Rc = Tc.get_rotation().get_matrix();
-      TooN::Vector<3> t2 = T2.get_translation();
-      TooN::Matrix<3> I = TooN::Identity;
+      TooN::Matrix<12,12,P> J = TooN::Zeros;
+      TooN::Matrix<3,3,P> R = T1.get_rotation().get_matrix();
+      TooN::Matrix<3,3,P> R2 = T2.get_rotation().get_matrix();
+      TooN::Matrix<3,3,P> Rc = Tc.get_rotation().get_matrix();
+      TooN::Vector<3,P> t2 = T2.get_translation();
+      TooN::Matrix<3,3,P> I = TooN::Identity;
 
-      J.slice<0,0,9,3>() = kron(I,Rc*R.T()[0].as_col());
-      J.slice<0,3,9,3>() = kron(I,Rc*R.T()[1].as_col());
-      J.slice<0,6,9,3>() = kron(I,Rc*R.T()[2].as_col());
+      J.template slice<0,0,9,3>() = kron(I,Rc*R.T()[0].as_col());
+      J.template slice<0,3,9,3>() = kron(I,Rc*R.T()[1].as_col());
+      J.template slice<0,6,9,3>() = kron(I,Rc*R.T()[2].as_col());
 
-      J.slice<9,0,3,3>() = kron(-t2.as_row(),Rc*R.T()[0].as_col());
-      J.slice<9,3,3,3>() = kron(-t2.as_row(),Rc*R.T()[1].as_col());
-      J.slice<9,6,3,3>() = kron(-t2.as_row(),Rc*R.T()[2].as_col());
+      J.template slice<9,0,3,3>() = kron(-t2.as_row(),Rc*R.T()[0].as_col());
+      J.template slice<9,3,3,3>() = kron(-t2.as_row(),Rc*R.T()[1].as_col());
+      J.template slice<9,6,3,3>() = kron(-t2.as_row(),Rc*R.T()[2].as_col());
 
-      J.slice<9,9,3,3>() = -Rc*R*R2.T();
+      J.template slice<9,9,3,3>() = -Rc*R*R2.T();
 
       return J;
     }
@@ -783,7 +812,7 @@ namespace RobotVision
 
 
   /** class for ridig transformation Se3 constraints
-      * using <So3,R3> as residual*/
+   * using <So3,R3> as residual*/
   class SE3ConFunSO3xR3 : public AbstractConFun<TooN::SE3<>,6>
   {
   private:

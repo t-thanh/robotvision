@@ -22,8 +22,6 @@
  */
 
 
-
-
 #ifndef RV_SIMILARITY_H
 #define RV_SIMILARITY_H
 
@@ -37,11 +35,21 @@
 namespace RobotVision
 {
 
-  /** The over-all design of this class Sim3 is inspired by an older
-    * version (April 2009) of the Se3 class of the TooN library
-    * (which was written by Tom Drummond and others).
-    * See: http://mi.eng.cam.ac.uk/~er258/cvd/toon.html
-    */
+  /**
+   * This class implements the Lie group and the corresponding Lie
+   * algebra of 3D similarity transformationns Sim3 as described in:
+   *
+   * > H. Strasdat, J.M.M. Montiel, A.J. Davison:
+   *   "Scale Drift-Aware Large Scale Monocular SLAM",
+   *   Proc. of Robotics: Science and Systems (RSS),
+   *   Zaragoza, Spain, 2010.
+   *   http://www.roboticsproceedings.org/rss06/p10.html <
+   *
+   * The over-all design of this class is inspired by an older
+   * version (April 2009) of the SE3 class of the TooN library
+   * (which was written by Tom Drummond and others).
+   * See: http://mi.eng.cam.ac.uk/~er258/cvd/toon.html
+   */
   template <typename Precision = double> class Sim3
                                  {
                                  public:
@@ -184,8 +192,6 @@ namespace RobotVision
     out_str << sim3.get_scale() << std::endl;
     return out_str;
   }
-
-
 
    template <typename Precision>
       inline TooN::Vector<7, Precision>

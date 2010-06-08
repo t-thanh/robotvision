@@ -712,7 +712,11 @@ void figure3()
                  makeVector(10,0,50));
   view3d.init(&glwin,Rectangle(0,0,1,1));
 
-  for (double noise = 0.0; noise<1.3; noise+=0.2)
+  cout.setf(ios::fixed,ios::floatfield);
+  cout.precision(4);
+
+
+  for (double noise = 1.2; noise>=0.0; noise-=0.2)
   {
 
     double sum_scale=0;
@@ -916,14 +920,12 @@ void figure3()
       SE3<> loop_pose = kf1;
       int new_id = num_points;
 
-      vector<RobotVision::Sim3<> > strans7_list;
       vector<Sim3<> > trans7_list;
       vector<Vector<3> > cor_point_vec;
       vector<Vector<3> > cor7_point_vec;
 
       vector<SE3<> > trans6_list;
       vector<SE3<> > cor7_pose_vec;\
-          vector<SE3<> > ccor7_pose_vec;
 
       StopWatch wait_in_the_end;
       while (!end || wait_in_the_end.readCurrentTime() < 5)
@@ -2198,7 +2200,7 @@ void figure4()
         }
       }
       double m = median(depth_set);
-      //cerr << "MEDIAN" << m << endl;
+      //cout << "MEDIAN" << m << endl;
 
       median_vec.push_back(m);
 
@@ -2324,9 +2326,10 @@ void figure4()
       ++truepose_id;
     }
 
+    glClearColor(1,1,1,1);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glClearColor(1,1,1,1);
+
 
     bool end = false;
     if(truepose_id>=true_pose_vec.size())
@@ -2521,10 +2524,13 @@ void figure4()
 
 int main(int argc, char *argv[])
 {
-  cout << "This program creates the figures of the paper:\n";
-  cout << ">H. Strasdat, J.M.M. Montiel, A.J. Davison:\n"
-       << " 'Scale Drift-Aware Large Scale Monocular SLAM',\n"
-       << "  Proc. of Robotics: Science and Systems (RSS), 2010.<\n\n";
+  cout << endl;
+  cout << "This program creates the figures of the paper:\n\n";
+  cout << "> H. Strasdat, J.M.M. Montiel, A.J. Davison:\n"
+       << "  'Scale Drift-Aware Large Scale Monocular SLAM',\n"
+       << "  Proc. of Robotics: Science and Systems (RSS),\n"
+       << "  Zaragoza, Spain, 2010.\n"
+       << "  http://www.roboticsproceedings.org/rss06/p10.htm <\n\n\n";
   if (argc>1 && atoi(argv[1])==2)
     figure2();
   if (argc>1 && atoi(argv[1])==3)
@@ -2534,6 +2540,8 @@ int main(int argc, char *argv[])
   else
   {
     cout << "Please type: ./rss2010_demo [2|3|4]" << endl;
+    cout << endl;
+    cout << "Example: './rss2010_demo 2'" << endl << endl;
   }
   return 0;
 

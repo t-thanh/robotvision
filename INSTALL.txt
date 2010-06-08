@@ -19,7 +19,7 @@ version).
 > sudo make install
 > cd ..
 
-For more details about TooN, please refer to: http://mi.eng.cam.ac.uk/~er258/cvd/index.html
+For more details about TooN, please refer to: http://mi.eng.cam.ac.uk/~er258/cvd/toon.html
 
 Install libCVD. Again, make sure that you install the right version (10 April 2010):
 
@@ -55,7 +55,7 @@ Now, download CSparse and copy its source files to RobotVision.
 > cp CSparse/Source/* robotvision/trunk/CSparse/
 > cp CSparse/Include/cs.h robotvision/trunk/CSparse/
 
-Finally, we can build RobotVision
+Finally, you can build RobotVision
 
 > cd robotvision/trunk
 > mkdir build
@@ -63,14 +63,13 @@ Finally, we can build RobotVision
 > cmake ..
 > make 
 
-Now, you can run the demo application:
+Now, you can run a demo application, e.g.:
 
 > ./rss2010_demo 2
 
 For more details, please refer to "README.txt".
 
-If RobotVision should be used as a library, it can also be installed 
-system-wide:
+The RobotVision library can also be installed system-wide:
 
 > sudo make install
 

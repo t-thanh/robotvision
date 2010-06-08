@@ -45,13 +45,13 @@ namespace TooN
   class SparseMatrix;
 
   /** TripletMatrix is the best way to fill SparseMatrix:
-     *  - Create TripletMatrix(num_row,num_cols)
-     *  - add non-zero data with add(i,j,v)
-     *  - create SparseMatrix from TripletMatrix
-     *  This is more memory- and time-efficient than
-     * create SparseMatrix from a dense matrix!
-     *  (Note you cannot change data in SparseMatrix, once it is created.)
-     */
+   *  - Create TripletMatrix(num_row,num_cols)
+   *  - add non-zero data with add(i,j,v)
+   *  - create SparseMatrix from TripletMatrix
+   *  This is more memory- and time-efficient than
+   * create SparseMatrix from a dense matrix!
+   *  (Note: You cannot change data in SparseMatrix, once it is created.)
+   */
   class TripletMatrix
   {
     template<int Size, int Size2>
