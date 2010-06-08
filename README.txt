@@ -20,8 +20,19 @@ downward looking camera. In the end, several loop closure constraints
 are identified and 7 DoF optimisation is performed.
 
 
-Version 1.0 of RobotVision offers "Bundle Adjustment" (bundle_adjuster.h) 
-and "Pose-graph Optimisation" (graph_optimizer.h) among other things. 
+Version 1.0 of RobotVision offers Bundle Adjustment (BA) (bundle_adjuster.h) 
+pose-graph optimisation (graph_optimizer.h) and 2D/3D visualisation among 
+other things. 
+
+In order to get to know the BundleAdjuster and 3D visualisation, please have a look at
+the BA toy example: "ba_demo.cpp".
+
+Try out the following:
+ - "./ba_demo 0.5 0.0  0" - BA problem with no spurious matches
+ - "./ba_demo 0.5 0.05 0" - BA problem with 5% of spurious matches
+                            (this should fail!)
+ - "./ba_demo 0.5 0.05 1" - BA problem with 5% of spurious matches, but
+                            using a robust kernel (this should work!)
 
 The core code of BundleAdjuster is in the method "calcFull". This method is 
 rather complex because of the exploitation of its underlying sparseness.
