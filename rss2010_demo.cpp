@@ -512,6 +512,7 @@ void figure2()
   RobotVision::BundleAdjuster<SE3<> ,6,3,3,IdObs<2>,2> ba;
 
   // map points into updated frames
+  cor7_point_vec = point_vec;
   for (uint i=0; i<obs_vec.size(); ++i)
   {
     int frame_id = obs_vec[i].frame_id;
@@ -522,14 +523,16 @@ void figure2()
       Vector<3> rel_point = transform(sim_vec[frame_id], point_vec[point_id]);
       Vector<3> cor_point
           = transform(updated_trans7_list[id].inverse(),rel_point);
-      cor7_point_vec.push_back(cor_point);
+
+
+      cor7_point_vec[point_id] = cor_point;
     }
-    else{
-      cor7_point_vec.push_back(point_vec[point_id]);
-    }
+
   }
 
   // map points into updated frames
+  cor_point_vec = point_vec;
+  
   for (uint i=0; i<obs_vec.size(); ++i)
   {
     int frame_id = obs_vec[i].frame_id;
@@ -540,11 +543,9 @@ void figure2()
       Vector<3> rel_point = transform(sim_vec[frame_id], point_vec[point_id]);
       Vector<3> cor_point
           = transform(updated_trans6_list[id].inverse(),rel_point);
-      cor_point_vec.push_back(cor_point);
+      cor_point_vec[point_id] = cor_point;
     }
-    else{
-      cor_point_vec.push_back(point_vec[point_id]);
-    }
+
   }
 
   cor7_point_vec_vorher =cor7_point_vec;
@@ -1325,8 +1326,8 @@ void figure3()
               median_scale = 1./median_scale;
 
             double scale_drift = median_scale-1;
-            double rmse_sim3 = v1/num_frames;
-            double rmse_se3 = v2/num_frames;
+            double rmse_sim3 = sqrt(v1/num_frames);
+            double rmse_se3 = sqrt(v2/num_frames);
 
             sum_rmse_se3 += rmse_se3;
             sum_rmse_sim3 += rmse_sim3;
