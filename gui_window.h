@@ -35,13 +35,38 @@
 
 namespace RobotVision
 {
-
   // Forward declarations
-  class AbstractView;
+  class GuiWindow;
+
+  class Viewport
+  {
+    friend class GuiWindow;
+
+  public:
+    Viewport() {}
+    Viewport(const CVD::ImageRef& size )
+      : pixel_size(TooN::makeVector(size.x,size.y)) { }
+    Viewport(const TooN::Vector<2>& size )
+      : pixel_size(size) { }
+
+    virtual CVD::GLWindow::EventHandler* get_handler() = 0;
+
+    inline Rectangle& BoundingBox() { return bounding_box; }
+    inline TooN::Vector<2>& PixelSize() { return pixel_size; }
+
+    inline float Left() { return bounding_box.x1; }
+    inline float Top() { return bounding_box.y1; }
+    inline float Width() { return bounding_box.Width(); }
+    inline float Height() { return bounding_box.Height(); }
+  protected:
+    GuiWindow* win;
+    TooN::Vector<2> pixel_size;
+    Rectangle bounding_box;
+  };
 
   class GuiWindow : public CVD::GLWindow, public CVD::GLWindow::EventHandler
   {
-    friend class AbstractView;
+    friend class Viewport;
     friend class ViewEventHandler;
 
   public:
@@ -55,6 +80,8 @@ namespace RobotVision
     void nextFrame(CVD::GLWindow::EventHandler& handler);
 
     void handle_events_default();
+
+    bool closed();
 
     void on_key_down(CVD::GLWindow& /*win*/, int /*key*/);
     void on_key_up(CVD::GLWindow& /*win*/, int /*key*/);
@@ -73,28 +100,31 @@ namespace RobotVision
     void on_event(CVD::GLWindow& /*win*/,
                   int /*event*/);
 
-    void set_active_view(AbstractView* view);
+    void set_active_view(Viewport* view);
+
+    Viewport* get_active_view();
+
+    // Connect view to this window within region box
+    void connectView(Viewport & view, const Rectangle & box);
 
     std::set<int> active_point_set;
 
-  private:
-    // Connect view to this window within region box
-    void connectView(AbstractView & view, const Rectangle & box);
+    void * quad;
+
+  protected:
 
     // Return view that contains window point wp
-    AbstractView* get_view( const CVD::ImageRef& wp, CVD::ImageRef* vp );
+    Viewport* get_view( const CVD::ImageRef& wp, CVD::ImageRef* vp );
 
     // Return coordinates relative to view
-    CVD::ImageRef view_coords( const AbstractView* view,
+    CVD::ImageRef view_coords( const Viewport* view,
                                const CVD::ImageRef wp ) const;
 
-    int num_id;
-    void * quad;
-    std::list<AbstractView*> viewpt_list;
+//    int num_id;
+    std::list<Viewport*> viewpt_list;
     CVD::ImageRef active_pos;
-    AbstractView * active_view;
+    Viewport * active_view;
     int mode;
-
   };
 }
 

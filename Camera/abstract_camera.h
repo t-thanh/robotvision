@@ -52,10 +52,16 @@ namespace RobotVision {
     virtual TooN::Vector<2> unmap(const TooN::Vector<2>& imframe) const = 0;
 
 
-    virtual TooN::Matrix<2>
-        jacobian(const TooN::Vector<2>& camframe) const = 0;
-    virtual TooN::Matrix<2>
-        inv_jacobian(const TooN::Vector<2>& imframe) const = 0;
+    virtual TooN::Matrix<2> jacobian(const TooN::Vector<2>& camframe) const = 0;
+
+
+    virtual const TooN::Vector<> params() const = 0;
+
+    // Project p_cam in to the camera, applying intrinsics and distortion
+    inline TooN::Vector<2> projectmap(const TooN::Vector<3>& p_cam) const
+    {
+      return map( TooN::project(p_cam) );
+    }
 
     inline int width() const { return size().x; }
     inline int height() const { return size().y; }

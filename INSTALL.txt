@@ -6,9 +6,9 @@ is already checked out using the following command:
 
 > svn co https://svn.openslam.org/data/svn/robotvision
 
-First, make sure that CMake is installed:
+First, make sure that CMake and OpenGL is installed:
 
-> sudo apt-get install cmake 
+> sudo apt-get install cmake libglu1-mesa-dev 
 
 Then, install TooN. Make sure that you install the right version (10 April 2010
 version). 

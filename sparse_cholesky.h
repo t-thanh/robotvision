@@ -25,6 +25,12 @@
 #ifndef RV_SPARSE_CHOLESKY_H
 #define RV_SPARSE_CHOLESKY_H
 
+#ifdef RV_SUITESPARSE_SUPPORT
+#include "SuiteSparseQR.hpp"
+#endif
+
+
+
 #include <list>
 #include "math.h"
 
@@ -32,11 +38,9 @@
 
 #include <stdexcept>
 
-extern "C"{
-#include "CSparse/cs.h"
-}
 
-namespace TooN
+
+namespace RobotVision
 {
 
   class NotPosSemiDefException : public std::runtime_error
@@ -48,12 +52,43 @@ namespace TooN
 
 
   template<int Size=TooN::Dynamic>
-  class SparseCholesky
+  class SparseSolver
   {
   public:
 
-    SparseCholesky(const SparseMatrix<Size> & s_M) : s_M(s_M)
+    SparseSolver(const SparseMatrix<Size> & s_M) : s_M(s_M)
     {
+
+#ifdef RV_SUITESPARSE_SUPPORT
+      assert(s_M.data->stype==0||s_M.data->stype==1);
+      if (s_M.data->stype==0)
+      {
+        use_qr = true;
+      }
+      else
+      {
+        use_qr = false;
+      }
+
+
+      if (!use_qr)
+      {
+        factor = cholmod_l_analyze(s_M.data,
+                                   &(CholmodSingleton::getInstance().data));
+
+        cholmod_l_factorize(s_M.data,
+                            factor,
+                            &(CholmodSingleton::getInstance().data));
+        int status= CholmodSingleton::getInstance().data.status;
+
+        if (status == CHOLMOD_NOT_POSDEF)
+        {
+          throw NotPosSemiDefException();
+        }
+      }
+
+#else
+
       symbolic_structure = NULL;
       numeric_structure = NULL;
 
@@ -63,11 +98,27 @@ namespace TooN
       {
         throw NotPosSemiDefException();
       }
+#endif
     }
-
 
     TooN::Matrix<Size,Size> get_L()
     {
+#ifdef RV_SUITESPARSE_SUPPORT
+      TooN::Matrix<Size,Size> L
+          = TooN::Zeros(factor->n,factor->n);
+
+      int col_idx = -1;
+
+      for (int r=0;r<(int)(s_M.data->nzmax); ++r)
+      {
+        if (reinterpret_cast<int *>(factor->p)[col_idx+1]==r)
+          ++col_idx;
+        L(reinterpret_cast<int *>(factor->i)[r],col_idx)
+            = reinterpret_cast<double *>(factor->x)[r];
+      }
+
+      return L;
+#else
       TooN::Matrix<Size,Size> L
           = TooN::Zeros(numeric_structure->L->m,numeric_structure->L->n);
 
@@ -81,27 +132,54 @@ namespace TooN
       }
 
       return L;
+#endif
     }
 
 
-    TooN::Vector<Size> backsub (const TooN::Vector<Size>& x) const
+    TooN::Vector<Size> backsub (const TooN::Vector<Size>& b) const
     {
-      TooN::Vector<Size> tmp = x;
-      TooN::Vector<Size> sol = x;
+#ifdef RV_SUITESPARSE_SUPPORT
+      DenseVector dense_b(b);
 
-      cs_ipvec(symbolic_structure->pinv,&x[0],&tmp[0],x.size());
+      cholmod_dense * dres;
+
+      if (use_qr)
+      {
+        dres = SuiteSparseQR<double>(s_M.data,
+                                     dense_b.data,
+                                     &(CholmodSingleton::getInstance().data));
+      }
+      else
+      {
+        dres = cholmod_l_solve(CHOLMOD_A,
+                               factor,
+                               dense_b.data,
+                               &(CholmodSingleton::getInstance().data));
+      }
+      DenseVector res(dres);
+
+
+
+      return res.vec();
+#else
+      TooN::Vector<Size> tmp = b;
+      TooN::Vector<Size> sol = b;
+
+      cs_ipvec(symbolic_structure->pinv,&b[0],&tmp[0],b.size());
       //permute con. pivoting
       cs_lsolve(numeric_structure->L,&tmp[0]);
       cs_ltsolve(numeric_structure->L,&tmp[0]);
-      cs_pvec(symbolic_structure->pinv,&tmp[0],&sol[0],x.size());
+      cs_pvec(symbolic_structure->pinv,&tmp[0],&sol[0],b.size());
       //unpermute con. pivoting
       return sol;
+#endif
     }
 
 
-    TooN::Matrix<Size,Size> backsub (const TooN::Matrix<Size,Size>& M) const {
+    TooN::Matrix<Size,Size> backsub (const TooN::Matrix<Size,Size>& M) const
+    {
 
-      TooN::Matrix<Size,Size> res(s_M.sparse_matrix.m,s_M.sparse_matrix.m);
+      TooN::Matrix<Size,Size> res(s_M.num_rows(),s_M.num_rows());
 
       for (int i=0;i<M.num_cols(); ++i)
       {
@@ -114,44 +192,34 @@ namespace TooN
 
     TooN::Matrix<Size,Size> get_inverse()const {
 
-      TooN::Matrix<Size,Size> I = TooN::Identity(s_M.sparse_matrix.m);
+      TooN::Matrix<Size,Size> I = TooN::Identity(s_M.num_rows());
 
 
       return backsub(I);
     }
 
 
-    void update(const SparseMatrix<Size,Size> & other)
-        //ATTENTION: other has to have the same sparseness structure!!
+    ~SparseSolver()
     {
-      assert(s_M.sparse_matrix.nzmax == other.sparse_matrix.nzmax);
-      assert(s_M.sparse_matrix.n == other.sparse_matrix.n);
+#ifdef RV_SUITESPARSE_SUPPORT
+      if (!use_qr)
+        cholmod_l_free_factor(&factor,&(CholmodSingleton::getInstance().data));
 
-      s_M.copy(&(other.sparse_matrix));
-
+#else
       cs_nfree(numeric_structure);
-      numeric_structure = NULL;
-
-      decomposition();
-      if (numeric_structure==NULL)
-      {
-        throw NotPosSemiDefException();
-      }
-    }
-
-
-    ~SparseCholesky()
-    {
-      cs_nfree(numeric_structure);
-
       cs_sfree(symbolic_structure);
+#endif
     }
 
   private:
-
+    SparseMatrix<Size> s_M;
+#ifdef RV_SUITESPARSE_SUPPORT
+    cholmod_factor * factor;
+    bool use_qr;
+#else
     css * symbolic_structure;
     csn * numeric_structure;
-    SparseMatrix<Size> s_M;
+
 
     void symbolicDecomposition()
     {
@@ -162,6 +230,7 @@ namespace TooN
     {
       numeric_structure = cs_chol (&(s_M.sparse_matrix),symbolic_structure) ;
     }
+#endif
   };
 }
 

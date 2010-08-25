@@ -39,6 +39,7 @@ namespace RobotVision
   public:
     MonoImage();
     MonoImage(const MonoImage& copy);
+    MonoImage(const CVD::Image<CVD::byte>& copy);
     MonoImage(const CVD::ImageRef & size);
 #ifdef RV_OPENCV_SUPPORT
     cv::Mat cv_mat;

@@ -171,16 +171,17 @@ namespace RobotVision
 
     int x1, y1, x2, y2;
 
-    int Width()
+    int Width() const
     {
       return std::max(0,x2-x1);
     }
 
-    int Height(){
+    int Height() const
+    {
       return std::max(0,y2-y1);
     }
 
-    bool IntersectsWith(const IRectangle & other)
+    bool IntersectsWith(const IRectangle & other) const
     {
       if(y2 <other.y1)	return false;
       if(y1    > other.y2)	return false;
@@ -189,13 +190,61 @@ namespace RobotVision
       return true;
     }
 
-    bool Contains(const IRectangle & other){
+    bool Contains(const IRectangle & other) const
+    {
       if(  y1  >= other.y1)   return false;
       if(  x1 >= other.x1)  return false;
       if( x2 <= other.x2) return false;
       if(y2 <= other.y2) return false;
       return true;
     }
+
+    void Insert( int x, int y)
+    {
+      x1 = std::min(x1,x);
+      x2 = std::max(x2,x);
+      y1 = std::min(y1,y);
+      y2 = std::max(y2,y);
+    }
+
+    void Insert( const IRectangle& d)
+    {
+      x1 = std::min(x1,d.x1);
+      x2 = std::max(x2,d.x2);
+      y1 = std::min(y1,d.y1);
+      y2 = std::max(y2,d.y2);
+    }
+
+    IRectangle Grow( int r ) const
+    {
+      RobotVision::IRectangle ret(*this);
+      ret.x1 -= r;
+      ret.x2 += r;
+      ret.y1 -= r;
+      ret.y2 += r;
+      return ret;
+    }
+
+    IRectangle Clamp( const CVD::ImageRef& size ) const
+    {
+      RobotVision::IRectangle ret(*this);
+      ret.x1 = std::max(0,ret.x1);
+      ret.y1 = std::max(0,ret.y1);
+      ret.x2 = std::min(size.x-1,ret.x2);
+      ret.y2 = std::min(size.y-1,ret.y2);
+      return ret;
+    }
+
+    bool Contains( int x, int y ) const
+    {
+      return x1 <= x && x <= x2 && y1 <= y && y <= y2;
+    }
+
+    bool Contains( const TooN::Vector<2>& p ) const
+    {
+      return Contains(p[0],p[1]);
+    }
+
   };
 
   template <class T>

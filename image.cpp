@@ -40,6 +40,17 @@ MonoImage::MonoImage() : Image<byte>(ImageRef(1,1))
 }
 
 
+
+MonoImage::MonoImage(const Image<byte>& copy) : Image<byte>(copy)
+{
+#ifdef RV_OPENCV_SUPPORT
+  cvd2opencv(*this, cvc_image);
+  cv_mat = cv::Mat(&cvc_image,false);
+  cvc_mat_pt = cvGetMat(&cvc_image,&cvc_mat_stub);
+#endif
+}
+
+
 MonoImage::MonoImage(const MonoImage& copy) : Image<byte>(copy)
 {
 #ifdef RV_OPENCV_SUPPORT

@@ -40,9 +40,8 @@ namespace RobotVision
 {
   class GuiWindow;
 
-  class AbstractView
+  class AbstractView : public Viewport
   {
-    friend class GuiWindow;
   public:
     AbstractView()
     {}
@@ -85,6 +84,7 @@ namespace RobotVision
     virtual void activate3D(const TooN::SE3<double> & pose) = 0;
 
     void drawTexture2D(const CVD::SubImage<CVD::byte> & img);
+    void drawTexture2D(const CVD::SubImage<float> & img);
     void drawTexture2D(const CVD::SubImage<CVD::Rgb<CVD::byte> > & img);
     void drawTexture2D(const CVD::SubImage<CVD::byte> & img,
                        const CVD::ImageRef & ir);
@@ -125,7 +125,7 @@ namespace RobotVision
     TooN::SE3<> getPose();
 
     inline CVD::ImageRef size() const {
-      return pixel_size;
+      return CVD::ImageRef(pixel_size[0],pixel_size[1]);
     }
 
     inline CVD::ImageRef viewSize() const {
@@ -135,21 +135,18 @@ namespace RobotVision
 
   protected:
     CVD::GLWindow::EventHandler* handler;
-    CVD::ImageRef pixel_size;
     TooN::Matrix<4> glK;
     TooN::SE3<double>  T_cw_;
     TooN::Vector<2> pixel2opengl(const TooN::Vector<2> & v);
-    GuiWindow * win;
     int id;
-    Rectangle bounding_box;
     TooN::QuadTree<int>  * qtree;
   };
 
   class DoomViewHandler : public CVD::GLWindow::EventHandler
   {
   public:
-    DoomViewHandler( AbstractView* view ) : view(view), enabled(false) {}
-    void on_key_down(CVD::GLWindow& /*win*/, int /*key*/);
+    DoomViewHandler( AbstractView* view ) : view(view), enabled(true) {}
+    virtual void on_key_down(CVD::GLWindow& /*win*/, int /*key*/);
     void on_mouse_down(CVD::GLWindow& /*win*/,
                        CVD::ImageRef /*where*/,
                        int /*state*/,

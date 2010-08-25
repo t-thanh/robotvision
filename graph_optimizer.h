@@ -75,10 +75,10 @@ namespace RobotVision
       TooN::Matrix<> J = getJac(trans_vec1, trans_vec2, s);
 
 
-      double res = getResidual(trans_vec1, trans_vec2, s, residual_vec);
-      if (isnan(res))
+      double chi2 = getResidual(trans_vec1, trans_vec2, s, residual_vec);
+      if (isnan(chi2))
       {
-        std::cerr << "res is NAN\n";
+        std::cerr << "chi2 is NAN\n";
         exit(-1);
       }
 
@@ -92,7 +92,7 @@ namespace RobotVision
       double mu = 0.0000000000000000001;
 
       if(verbose>0)
-        std::cout << "res: " << res << std::endl;
+        std::cout << "chi2: " << chi2 << std::endl;
 
       for (int i_g=0; i_g<num_iter; ++i_g){
         double rho = 0;
@@ -117,20 +117,20 @@ namespace RobotVision
           new_s = s+delta[0];
 
 
-          double res_new = getResidual(trans_vec1,
+          double chi2_new = getResidual(trans_vec1,
                                        trans_vec2,
                                        new_s,
                                        residual_vec);
 
-          rho = (res-res_new )/(delta*(mu*delta+g));
+          rho = (chi2-chi2_new )/(delta*(mu*delta+g));
 
           if(rho>0)
           {
             if(verbose>0)
-              std::cerr << "res_new: " << res_new << std::endl;
+              std::cout << "chi2_new: " << chi2_new << std::endl;
             s = new_s;
 
-            res = res_new ;
+            chi2 = chi2_new ;
 
             TooN::Matrix<> J = getJac(trans_vec1, trans_vec2, s);
 
@@ -144,8 +144,8 @@ namespace RobotVision
           else
           {
             if (verbose>0)
-              std::cout << "no update: res vs.res_new "
-                  << res << " vs. " << res_new << std::endl;
+              std::cout << "no update: chi2 vs.chi2_new "
+                  << chi2 << " vs. " << chi2_new << std::endl;
 
             mu *= nu;
             nu *= 2.;
@@ -156,7 +156,7 @@ namespace RobotVision
         if (stop)
           break;
       }
-      return res;
+      return chi2;
     }
 
     int verbose;
@@ -251,7 +251,7 @@ namespace RobotVision
    *   Zaragoza, Spain, 2010.
    *   http://www.roboticsproceedings.org/rss06/p10.html <
    *
-   * The concrete implementation/notation of LM is partially inspired by
+   * The the update strategy of mu follows
    * >M.I. A. Lourakis and A.A. Argyros, "The Design and Implementation
    *  of a Generic Sparse Bundle Adjustment Software Package Based on
    *  the Levenberg-Marquardt Algorithm", Technical Report, 2004.<
@@ -292,33 +292,23 @@ namespace RobotVision
       std::vector<Trans > new_trans_vec(num_trans);
       TooN::Vector<>residual_vec (num_constraints*TransDoF);
 
-      std::pair<TooN::SparseMatrix<>,TooN::SparseMatrix<> >
-          pair_J_JTLambda
-          = getJac(trans_vec,
-                   constraint_list,
-                   con_fun,
-                   num_fixed_trans);
-
-      TooN::SparseMatrix<> & J = pair_J_JTLambda.first;
-      TooN::SparseMatrix<> & J_T_Lambda = pair_J_JTLambda.second;
+    
 
 
-      double res = getResidual(trans_vec,
+      double chi2 = getResidual(trans_vec,
                                constraint_list,
                                con_fun,
                                residual_vec);
-      if (isnan(res))
+      if (isnan(chi2))
       {
-        std::cerr << "res is NAN\n";
+        std::cerr << "chi2 is NAN\n";
         exit(-1);
       }
 
       if(verbose>0)
-        std::cout << "res: " << res << std::endl;
+        std::cout << "chi2 " << chi2 << std::endl;
 
-      TooN::SparseMatrix<> A = J_T_Lambda*J;
-      TooN::Vector<> g = -(J_T_Lambda*residual_vec);
-      TooN::SparseCholesky<> spCh (A);
+
 
       double nu = 2;
       double eps =0.000000000000001;
@@ -329,48 +319,68 @@ namespace RobotVision
         double rho = 0;
         do
         {
+          RowBlockMapVec<TransDoF> H(num_trans - num_fixed_trans);
+          TooN::Vector<> g
+              = TooN::Zeros(TransDoF*(num_trans - num_fixed_trans));
+
           if (verbose>0)
             std::cout << "iteration: "<< i_g << std::endl;
           if (verbose>0)
             std::cout << "mu: " <<mu<< std::endl;
-          ++i_g;
-          TooN::Matrix<> III = TooN::Identity(A.num_cols())*mu;
-          TooN::SparseMatrix<> sIII(III);
-          TooN::SparseMatrix<> A_mu = A + sIII;
 
-          spCh.update(A_mu);
-          TooN::Vector<> delta = spCh.backsub(g);
+        
+
+          calcHessianAndGradient(trans_vec,
+                                 constraint_list,
+                                 con_fun,
+                                 num_fixed_trans,
+
+                                 mu,
+                                 H,
+                                 g);
+
+          SparseMatrix<> sH(H);
+          TooN::Vector<> delta(TransDoF*(num_trans - num_fixed_trans));
+          try
+          {
+            SparseSolver<> spCh (sH);
+
+            delta = spCh.backsub(g);
+          }catch (NotPosSemiDefException & e) {
+            // not positive definite so increase mu and try again
+
+
+
+            std::cout << "Not pose Def" << std::endl;
+
+            mu *= nu;
+            nu *= 2.;
+            stop = (mu>999999999.f);
+            continue;
+          }
+
+
+
           addTrans(trans_vec,
                    delta,
                    con_fun,
                    new_trans_vec,
                    num_fixed_trans);
-          double res_new = getResidual(new_trans_vec,
+          double chi2_new = getResidual(new_trans_vec,
                                        constraint_list,
                                        con_fun,
                                        residual_vec);
-          rho = (res-res_new)/(delta*(mu*delta+g));
+          rho = (chi2-chi2_new)/(delta*(mu*delta+g));
+
 
           if(rho>0)
           {
+            ++i_g;
             if(verbose>0)
-              std::cerr << "res_new: " << res_new << std::endl;
+              std::cout << "chi2_new: " << chi2_new << std::endl;
             trans_vec = std::vector<Trans > (new_trans_vec);
-            res = res_new;
-            std::pair<TooN::SparseMatrix<>,TooN::SparseMatrix<> >
-                pair_J_JTLambda
-                = getJac(trans_vec,
-                         constraint_list,
-                         con_fun,
-                         num_fixed_trans);
-
-            TooN::SparseMatrix<> & J
-                = pair_J_JTLambda.first;
-            TooN::SparseMatrix<> & J_T_Lambda
-                = pair_J_JTLambda.second;
-
-            A = J_T_Lambda*J;
-            g = -(J_T_Lambda*residual_vec);
+            chi2 = chi2_new;
+           
             stop = norm_max(g)<=eps;
             mu *= std::max(1./3.,1-Po3(2*rho-1));
             nu = 2.;
@@ -378,8 +388,8 @@ namespace RobotVision
           else
           {
             if (verbose>0)
-              std::cout << "no update: res vs.res_new "
-                  << res << " vs. " << res_new << std::endl;
+              std::cout << "no update: chi2 vs.chi2_new "
+                  << chi2 << " vs. " << chi2_new << std::endl;
             mu *= nu;
             nu *= 2.;
             stop = (mu>999999999.f);
@@ -394,23 +404,19 @@ namespace RobotVision
     int verbose;
 
   private:
-    std::pair<TooN::SparseMatrix<>,TooN::SparseMatrix<> >
-        getJac(const std::vector<Trans > & trans_vec,
-               const _ConsList & constraint_list,
-               const AbstractConFun<Trans,TransDoF> & con_fun,
-               const int  num_fixed_trans )
+   
+
+    void calcHessianAndGradient(const std::vector<Trans > & trans_vec,
+                                const _ConsList & constraint_list,
+                                const AbstractConFun<Trans,TransDoF> & con_fun,
+                                const int  num_fixed_trans,
+                                double mu,
+                                RowBlockMapVec<TransDoF> & H,
+                                TooN::Vector<> & g)
     {
-      int num_constraints = constraint_list.size();
-      int num_trans = trans_vec.size();
+      TooN::Matrix<TransDoF,TransDoF> muInf = mu*TooN::Identity;
 
-      TooN::TripletMatrix
-          J(TransDoF*num_constraints,
-            TransDoF*(num_trans-num_fixed_trans ));
-      TooN::TripletMatrix
-          J_T_Lambda(TransDoF*(num_trans-num_fixed_trans ),
-                     TransDoF*num_constraints);
-
-      int constraint_id=0;
+    
       for (typename _ConsList::const_iterator it
            = constraint_list.begin();
       it!=constraint_list.end();
@@ -421,44 +427,75 @@ namespace RobotVision
         const Trans & mean = it->mean;
         const TooN::Matrix<TransDoF,TransDoF> & inf
             = it->fisher_information;
+        int col_id1 =  id1-num_fixed_trans;
+        int col_id2 =  id2-num_fixed_trans;
+        TooN::Matrix<TransDoF,TransDoF>  J1;
+        TooN::Matrix<TransDoF,TransDoF>  J2;
 
-        TooN::Matrix<TransDoF,TransDoF>  blockJac1
-            = con_fun.d_diff_dT1(trans_vec[id1],
-                                 mean,
-                                 trans_vec[id2]);
+        TooN::Vector<TransDoF> delta
+            = con_fun.diff(trans_vec[id1],
+                           mean,
+                           trans_vec[id2]);
 
-        TooN::Matrix<TransDoF,TransDoF>  blockJac2
-            = con_fun.d_diff_dT2(trans_vec[id1],
-                                 mean,
-                                 trans_vec[id2]);
-
-        TooN::Matrix<TransDoF,TransDoF>  blockJac1_T_Lambda
-            = blockJac1.T()*inf;
-        TooN::Matrix<TransDoF,TransDoF>  blockJac2_T_Lambda
-            = blockJac2.T()*inf;
-
-        int col_id =  id1-num_fixed_trans;
-        if (col_id>=0)
+        if (col_id1>=0)
         {
-          J.add(constraint_id*TransDoF,col_id*TransDoF,blockJac1);
+          J1 = con_fun.d_diff_dT1(trans_vec[id1],
+                                   mean,
+                                   trans_vec[id2]);
 
-          J_T_Lambda.add(col_id*TransDoF,
-                         constraint_id*TransDoF,
-                         blockJac1_T_Lambda);
+
+          H.add(J1.T()*inf*J1,
+                muInf,
+                col_id1,
+                col_id1);
+
+          g.slice(col_id1*TransDoF,TransDoF)
+              -= J1.T()*inf*delta;
         }
-        col_id =  id2-num_fixed_trans;
-        if (col_id>=0)
+
+        if (col_id2>=0)
         {
-          J.add(constraint_id*TransDoF,col_id*TransDoF, blockJac2);
-          J_T_Lambda.add(col_id*TransDoF,
-                         constraint_id*TransDoF,
-                         blockJac2_T_Lambda);
+           J2 = con_fun.d_diff_dT2(trans_vec[id1],
+                                   mean,
+                                   trans_vec[id2]);
+
+
+
+
+          H.add(J2.T()*inf*J2,
+                muInf,
+                col_id2,
+                col_id2);
+
+          g.slice(col_id2*TransDoF,TransDoF)
+              -= J2.T()*inf*delta;
+
+          if (col_id1>=0 )
+          {
+
+            TooN::Matrix<TransDoF,TransDoF> tmp = J1.T()*inf*J2;
+
+           if (col_id1<col_id2)
+           {
+              H.add(tmp,
+                    col_id1,
+                    col_id2);
+            }
+            else// if (col_id1!=col_id2)
+            {
+
+              H.add(tmp.T(),
+                    col_id2,
+                    col_id1);
+            }
+          }
         }
-        ++constraint_id;
+
+
+       
       }
 
-      return std::make_pair(TooN::SparseMatrix<>(J),
-                            TooN::SparseMatrix<>(J_T_Lambda));
+    
     }
 
 

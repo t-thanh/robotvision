@@ -30,15 +30,57 @@ using namespace TooN;
 
 namespace RobotVision{
 
+  LinearCamera::LinearCamera()
+    : fl_and_pp(4),
+    focal_length(makeVector(1,1)),
+    principle_point(Zeros),
+    image_size(-1,-1) ,
+    intrinsics(Identity),
+    inv_intrinsics(Identity(3))
+  {
+    fl_and_pp.slice<0,2>() = focal_length;
+    fl_and_pp.slice<2,2>() = principle_point;
+  }
+
+  LinearCamera::LinearCamera(const AbstractCamera& cam)
+    :fl_and_pp(4),
+    focal_length(cam.F()),
+    principle_point(cam.P()),
+    image_size(cam.size()) ,
+    intrinsics(Identity),
+    inv_intrinsics(Identity(3))
+  {
+    initialise();
+  }
+
+  LinearCamera::LinearCamera(const TooN::Matrix<3,3> K,
+               const CVD::ImageRef & size)
+    :fl_and_pp(4),
+    focal_length(makeVector( K[0][0]/K[2][2], K[1][1]/K[2][2])),
+    principle_point(makeVector( K[0][2]/K[2][2], K[1][2]/K[2][2])),
+    image_size(size),
+    intrinsics(Identity)
+  {
+    initialise();
+  }
+
   LinearCamera::LinearCamera(const Vector<2> & focal_length,
                              const Vector<2> & principle_point,
                              const CVD::ImageRef & size)
-                               : focal_length(focal_length) ,
+                               :fl_and_pp(4),
+                               focal_length(focal_length),
                                principle_point(principle_point),
                                image_size(size) ,
                                intrinsics(Identity),
                                inv_intrinsics(Identity(3))
   {
+    initialise();
+  }
+
+  void LinearCamera::initialise()
+  {
+    fl_and_pp.slice<0,2>() = focal_length;
+    fl_and_pp.slice<2,2>() = principle_point;
     inv_focal_length = makeVector(1./focal_length[0], 1./focal_length[1]);
     intrinsics(0,0) = focal_length[0];
     intrinsics(1,1) = focal_length[1];
@@ -49,6 +91,7 @@ namespace RobotVision{
     inv_intrinsics(0,2) = -principle_point[0]*inv_focal_length[0];
     inv_intrinsics(1,2) = -principle_point[1]*inv_focal_length[1];
   }
+
 
   TooN::Vector<2> LinearCamera::map(const TooN::Vector<2>& point) const
   {

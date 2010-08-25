@@ -40,9 +40,9 @@ FOREACH(lib ${LIB_NAMES})
   LIST(APPEND LIBS ${LIB_${lib}})
 ENDFOREACH(lib)
 
-SET (CLASSES gui_view abstract_view gui_window maths_utils image Camera/linear_camera opencv_helper  )
+SET (CLASSES gui_view abstract_view gui_window maths_utils image Camera/linear_camera opencv_helper sparse_matrix  )
 
-SET (SOURCES quadtree.h stopwatch.h bundle_adjuster.h graph_optimizer.h transformations.h sparse_cholesky.h sparse_matrix.h rectangle.h sim3.h Camera/abstract_camera.h  )
+SET (SOURCES quadtree.h stopwatch.h bundle_adjuster.h graph_optimizer.h transformations.h sparse_cholesky.h rectangle.h sim3.h Camera/abstract_camera.h  )
 
 
 # Append CSparse Sources

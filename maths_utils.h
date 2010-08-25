@@ -27,10 +27,9 @@
 
 #include <math.h>
 #include <set>
-#include <assert.h>
+#include <cassert>
 #include <TooN/TooN.h>
-
-#include <TooN/TooN.h>
+#include <TooN/se2.h>
 #include <TooN/se3.h>
 #include <TooN/SVD.h>
 #include <cvd/image_io.h>
@@ -164,11 +163,11 @@ namespace RobotVision
   TooN::Vector<TooN::Dynamic,Precision>
       vec(const TooN::Matrix<K,L,Precision> & M)
   {
-    uint rows = M.num_rows();
-    uint cols = M.num_cols();
+    unsigned int rows = M.num_rows();
+    unsigned int cols = M.num_cols();
     TooN::Vector<TooN::Dynamic,Precision> v(rows*cols);
 
-    for (uint i=0; i<cols;++i)
+    for (unsigned int i=0; i<cols;++i)
     {
       v.slice(i*rows,rows) = M.T()[i];
     }

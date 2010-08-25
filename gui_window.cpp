@@ -35,9 +35,11 @@ using namespace RobotVision;
 
 
 GuiWindow::GuiWindow(const ImageRef & ir, const CVD::GLWindow* sharedContext)
-  : GLWindow(ir,24,"GuiWindow","" /*,sharedContext*/)
-{
-  num_id = 0;
+  : GLWindow(ir,24,"GuiWindow", ""
+#ifdef SL203_SHARED_CONTEXT_PATCH
+  ,sharedContext
+#endif
+) {
   quad = gluNewQuadric();
   active_view = 0;
   mode = 0;
@@ -46,6 +48,11 @@ GuiWindow::GuiWindow(const ImageRef & ir, const CVD::GLWindow* sharedContext)
 GuiWindow::~GuiWindow()
 {
   gluDeleteQuadric((GLUquadric* )quad);
+}
+
+bool GuiWindow::closed()
+{
+  return mode == -1;
 }
 
 void GuiWindow::nextFrame(GLWindow::EventHandler& handler)
@@ -57,55 +64,55 @@ void GuiWindow::handle_events_default() {
   GLWindow::handle_events(*this);
 }
 
-void GuiWindow::connectView(AbstractView& view,
+void GuiWindow::connectView(Viewport& view,
                             const RobotVision::Rectangle & box)
 {
-
-  RectObj<AbstractView*> ro(box,(&view));
-  viewpt_list.push_back(&view);
-  view.id = num_id;
+  viewpt_list.push_front(&view);
   view.bounding_box = box;
-  num_id++;
+  view.win = this;
 }
 
-AbstractView* GuiWindow::get_view( const CVD::ImageRef& wp, CVD::ImageRef* vp )
+Viewport* GuiWindow::get_view( const CVD::ImageRef& wp, CVD::ImageRef* vp )
 {
-  for (list<AbstractView*>::iterator iter=viewpt_list.begin();
+  for (list<Viewport*>::iterator iter=viewpt_list.begin();
   iter!=viewpt_list.end();
   ++iter)
   {
-    const Rectangle & box = (*iter)->bounding_box;
-    const double rel_x = (1.*wp.x) / this->size().x;
-    const double rel_y = 1-(1.*wp.y) / this->size().y;
-    const ImageRef pixel_size = (*iter)->pixel_size;
+    if( (*iter)->get_handler() != NULL )
+    {
+      const Rectangle & box = (*iter)->bounding_box;
+      const double rel_x = (1.*wp.x) / this->size().x;
+      const double rel_y = 1-(1.*wp.y) / this->size().y;
+      const Vector<2> pixel_size = (*iter)->pixel_size;
 
-    if(box.contains(Rectangle(rel_x, rel_y, rel_x, rel_y))){
-      if( vp )
-      {
-        vp->x = (rel_x-box.x1)/(box.x2-box.x1)*pixel_size.x;
-        vp->y = (rel_y-box.y1)/(box.y2-box.y1)*pixel_size.y;
+      if(box.contains(Rectangle(rel_x, rel_y, rel_x, rel_y))){
+        if( vp )
+        {
+          vp->x = (rel_x-box.x1)/(box.x2-box.x1)*pixel_size[0];
+          vp->y = (rel_y-box.y1)/(box.y2-box.y1)*pixel_size[1];
+        }
+        return *iter;
       }
-      return *iter;
     }
   }
   return NULL;
 }
 
-CVD::ImageRef GuiWindow::view_coords( const AbstractView* view,
+CVD::ImageRef GuiWindow::view_coords( const Viewport* view,
                                       const CVD::ImageRef wp ) const
 {
   const Rectangle & box = view->bounding_box;
   const double rel_x = (1.*wp.x) / this->size().x;
   const double rel_y = 1-(1.*wp.y) / this->size().y;
-  const ImageRef pixel_size = view->pixel_size;
+  const Vector<2> pixel_size = view->pixel_size;
   return ImageRef(
-      (rel_x-box.x1)/(box.x2-box.x1)*pixel_size.x,
-      (rel_y-box.y1)/(box.y2-box.y1)*pixel_size.y
+      (rel_x-box.x1)/(box.x2-box.x1)*pixel_size[0],
+      (rel_y-box.y1)/(box.y2-box.y1)*pixel_size[1]
       );
 }
 
 
-void GuiWindow::set_active_view(AbstractView* view)
+void GuiWindow::set_active_view(Viewport* view)
 {
   if( active_view && active_view->get_handler() )
   {
@@ -118,6 +125,11 @@ void GuiWindow::set_active_view(AbstractView* view)
   {
     active_view->get_handler()->on_event(*this,EVENT_VIEW_ACTIVATED);
   }
+}
+
+Viewport* GuiWindow::get_active_view()
+{
+  return active_view;
 }
 
 void GuiWindow::on_key_down(CVD::GLWindow& w, int k)
@@ -149,7 +161,7 @@ void GuiWindow::on_mouse_down(CVD::GLWindow& w,
                               int button)
 {
   ImageRef vp;
-  AbstractView* view = get_view(where,&vp);
+  Viewport* view = get_view(where,&vp);
 
   if( view )
   {
@@ -183,6 +195,9 @@ void GuiWindow::on_resize(CVD::GLWindow& w, CVD::ImageRef size)
 
 void GuiWindow::on_event(CVD::GLWindow& w, int event)
 {
+  if( event == GLWindow::EVENT_CLOSE )
+    mode = -1;
+
   if( active_view && active_view->get_handler() )
     active_view->get_handler()->on_event(w,event);
 }

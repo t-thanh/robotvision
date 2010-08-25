@@ -31,8 +31,19 @@ namespace RobotVision {
   class LinearCamera : public AbstractCamera
   {
   public:
-    LinearCamera() {}
+    static const int NUM_PARAMS = 4;
 
+    // Construct Identity Camera
+    LinearCamera();
+
+    // Contract from Linear portion of cam
+    LinearCamera(const AbstractCamera& cam);
+
+    // Construct Linear camera given intrinsics matrix
+    LinearCamera(const TooN::Matrix<3,3> K,
+                 const CVD::ImageRef & size);
+
+    // Construct Linear camera given parameters
     LinearCamera(const TooN::Vector<2> & focal_length,
                  const TooN::Vector<2> & principle_point,
                  const CVD::ImageRef & size);
@@ -54,6 +65,12 @@ namespace RobotVision {
       return focal_length;
     }
 
+    /// Focal Length
+    const TooN::Vector<2>& Finv() const
+    {
+      return inv_focal_length;
+    }
+
     const TooN::Matrix<3,3>& K() const
     {
       return intrinsics;
@@ -62,6 +79,11 @@ namespace RobotVision {
     const TooN::Matrix<3,3>& Kinv() const
     {
       return inv_intrinsics;
+    }
+
+    const TooN::Vector<> params() const
+    {
+      return fl_and_pp;
     }
 
     TooN::Vector<2> map(const TooN::Vector<2>& camframe) const;
@@ -74,7 +96,10 @@ namespace RobotVision {
     TooN::Matrix<2> inv_jacobian() const;
 
   private:
+    void initialise();
+
     //Trick: Do computation once, and store ambiguous represenations
+    TooN::Vector<> fl_and_pp; //
     TooN::Vector<2> focal_length;
     TooN::Vector<2> principle_point;
     CVD::ImageRef image_size;

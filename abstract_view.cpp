@@ -59,7 +59,7 @@ TooN::SE3<> AbstractView::getPose()
 }
 
 AbstractView::AbstractView(const ImageRef & size)
-  : handler(NULL), pixel_size( size ), T_cw_(Identity(3), makeVector(0,0,3))
+  : Viewport(size), handler(NULL), T_cw_(Identity(3), makeVector(0,0,3))
 
 {
   qtree = new QuadTree<int>(RobotVision::Rectangle(0,0,size.x,size.y),1);
@@ -68,19 +68,18 @@ AbstractView::AbstractView(const ImageRef & size)
 AbstractView::AbstractView(const ImageRef & size,
                            const Vector<3>& axis_angle,
                            const Vector<3>& trans)
-                             : handler(NULL),
-                             pixel_size( size ),
+                             : Viewport(size),handler(NULL),
                              T_cw_(SO3<>(axis_angle),trans)
 {
   qtree = new QuadTree<int>(RobotVision::Rectangle(0,0,size.x,size.y),1);
 }
 
 AbstractView::AbstractView(const AbstractView & view)
-  :  handler(NULL), pixel_size( view.pixel_size )
+  :  Viewport(view.pixel_size), handler(NULL)
 {
   qtree
       = new QuadTree<int>(Rectangle(0,0,
-                                    view.pixel_size.x,view.pixel_size.y),1);
+                                    view.pixel_size[0],view.pixel_size[1]),1);
 }
 
 CVD::GLWindow::EventHandler* AbstractView::get_handler()
@@ -101,7 +100,7 @@ GuiWindow* AbstractView::parent()
 
 bool AbstractView::isNavigating()
 {
-  return win && win->active_view == this;
+  return win && win->get_active_view() == this;
 }
 
 TooN::Vector<3> AbstractView::intersectScene( const CVD::ImageRef& ip )
@@ -125,8 +124,8 @@ TooN::Vector<3> AbstractView::intersectScene( const CVD::ImageRef& ip )
     glK[0][3], glK[1][3], glK[2][3], glK[3][3]
   };
 
-  const GLfloat winx = viewport[0]+((float)ip.x / pixel_size.x)*viewport[2];
-  const GLfloat winy = viewport[1]+((float)ip.y / pixel_size.y)*viewport[3];
+  const GLfloat winx = viewport[0]+((float)ip.x / pixel_size[0])*viewport[2];
+  const GLfloat winy = viewport[1]+((float)ip.y / pixel_size[1])*viewport[3];
   GLfloat winz;
   glReadPixels((GLint)winx,(GLint)winy,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,&winz);
 
@@ -138,6 +137,36 @@ TooN::Vector<3> AbstractView::intersectScene( const CVD::ImageRef& ip )
   }else{
     return makeVector(0,0,0);
   }
+}
+
+void AbstractView::drawTexture2D(const SubImage<float> & img)
+{
+  glEnable(GL_TEXTURE_2D);
+  GLuint texture;
+  glGenTextures(1, &texture);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glTexImage2D(img);
+
+  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+  glBindTexture(GL_TEXTURE_2D, texture);
+
+  float x1 = 0;
+  float y1  = 0;
+  float x2 = pixel_size[0];
+  float y2  = pixel_size[1];
+
+  glBegin(GL_QUADS);
+
+  glTexCoord2f(0.0f, 0.0f); glVertex2i(0, 0);
+  glTexCoord2f(0.0f, 1.0f); glVertex2i(0, y2-y1);
+  glTexCoord2f(1.0f, 1.0f); glVertex2i(x2-x1, y2-y1);
+  glTexCoord2f(1.0f, 0.0f); glVertex2i(x2-x1, 0);
+
+  glEnd();
+
+  glDeleteTextures(1,&texture);
+  glDisable(GL_TEXTURE_2D);
 }
 
 void AbstractView::drawTexture2D(const SubImage<CVD::byte> & img)
@@ -154,8 +183,8 @@ void AbstractView::drawTexture2D(const SubImage<CVD::byte> & img)
 
   float x1 = 0;
   float y1  = 0;
-  float x2 = pixel_size.x;
-  float y2  = pixel_size.y;
+  float x2 = pixel_size[0];
+  float y2  = pixel_size[1];
 
   glBegin(GL_QUADS);
 
@@ -284,8 +313,8 @@ void AbstractView::drawTexture2D(const SubImage<Rgb<CVD::byte> > & img)
 
   float x1 = 0;
   float y1  = 0;
-  float x2 = pixel_size.x;
-  float y2  = pixel_size.y;
+  float x2 = pixel_size[0];
+  float y2  = pixel_size[1];
 
   glBegin(GL_QUADS);
 
@@ -470,23 +499,22 @@ void AbstractView::activate()
 }
 
 void AbstractView::init(GuiWindow * win, const RobotVision::Rectangle & box){
-  this->win = win;
   win->connectView(*this,box);
 }
-
 
 void AbstractView::drawCovariance3D(const Vector<3> & trans,
                                     const Matrix<3> & pose_unc,
                                     double number_of_sigma){
   //ToDo: Check whether this is doing the right thing!
+  //Should be alright now!
   glPushMatrix();
   glTranslatef(trans[0], trans[1], trans[2]);
 
   SymEigen<3> e_system(pose_unc);
   Matrix<3> & V = e_system.get_evectors();
-  GLfloat Varray[ 16 ] = {V( 0, 0 ), V( 1, 0 ), V( 2, 0 ), 0.0,
-                          V( 0, 1 ), V( 1, 1 ), V( 2, 1 ), 0.0,
-                          V( 0, 2 ), V( 1, 2 ), V( 2, 2 ), 0.0,
+  GLfloat Varray[ 16 ] = {V( 0, 0 ), V( 0, 1 ), V( 0, 2 ), 0.0,
+                          V( 1, 0 ), V( 1, 1 ), V( 1, 2 ), 0.0,
+                          V( 2, 0 ), V( 2, 1 ), V( 2, 2 ), 0.0,
                           0.0, 0.0, 0.0, 1.0};
   glMultMatrixf( Varray );
   Vector<3> v = e_system.get_evalues();

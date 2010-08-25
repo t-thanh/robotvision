@@ -29,20 +29,17 @@
 #include <map>
 
 #include <TooN/TooN.h>
-#include <TooN/SVD.h>
-#include <TooN/LU.h>
 #include <TooN/TooN.h>
 #include <TooN/se3.h>
 #include <TooN/se2.h>
-#include <TooN/SymEigen.h>
 #include <TooN/Cholesky.h>
+#include <cvd/image_io.h>
 
 #include "maths_utils.h"
 #include "sparse_matrix.h"
 #include "sparse_cholesky.h"
 #include "transformations.h"
-
-#define RV_USE_SPARSE_CHOLESKY 1
+#include "stopwatch.h"
 
 
 
@@ -61,48 +58,63 @@
 #endif
 
 
+
+
+
 namespace RobotVision
 {
   /**
      * Parameter class for BundleAdjuster (see below)
      */
-  class BundleAdjusterParams{
+  class BundleAdjusterParams
+  {
   public:
     BundleAdjusterParams(bool robust_kernel=true,
                          double kernel_param=1,
                          int num_iter=50,
-                         double mu=-1):
+                         double initial_mu=-1,
+                         double final_mu_factor=999999.,
+                         double tau = 0.00001):
     robust_kernel(robust_kernel),
     kernel_param(kernel_param),
     num_iter(num_iter),
-    mu(mu)
+    initial_mu(initial_mu),
+    final_mu_factor(final_mu_factor),
+    tau(tau)
     {
     }
     bool robust_kernel;
     double kernel_param;
     int num_iter;
-    double mu;
+    double initial_mu;
+    double final_mu_factor;
+    double tau;
   };
+
+
 
   /**
      * Helper class for BundleAdjuster (see below)
      */
-  template <int FrameDof, int PointDof, int ObsDim> class JacData
+  template <int FrameDoF, int PointDoF, int ObsDim> class JacData
   {
   public:
     JacData()
     {
       double nan = NAN;
-      J_frame = TooN::Ones(ObsDim,FrameDof)*nan;
-      J_point = TooN::Ones(ObsDim,PointDof)*nan;
+      J_frame = TooN::Ones(ObsDim,FrameDoF)*nan;
+      J_point = TooN::Ones(ObsDim,PointDoF)*nan;
+      J_anchor = TooN::Ones(ObsDim,FrameDoF)*nan;
     }
 
   public:
-    TooN::Matrix<ObsDim,FrameDof>   J_frame;
-    TooN::Matrix<ObsDim,PointDof>  J_point;
-    int frame_id;
-    int point_id;
+    TooN::Matrix<ObsDim,FrameDoF> J_frame;
+    TooN::Matrix<ObsDim,PointDoF> J_point;
+    TooN::Matrix<ObsDim,FrameDoF> J_anchor;
   };
+
+
+
 
 
   /**
@@ -116,10 +128,15 @@ namespace RobotVision
    *   Zaragoza, Spain, 2010.
    *   http://www.roboticsproceedings.org/rss06/p10.html <
    *
-   * The concrete implementation/notation of LM is partially inspired by
+   * The the update strategy of mu follows
    * >M.I. A. Lourakis and A.A. Argyros, "The Design and Implementation
    *  of a Generic Sparse Bundle Adjustment Software Package Based on
    *  the Levenberg-Marquardt Algorithm", Technical Report, 2004.<
+   * and the implementation of the Schur complement is inspired by
+   * >C. Engels, H. Stewnius, D. Nister, "Bundle Adjustment Rules",
+   * Photogrammetric Computer Vision (PCV), September 2006.
+   * and
+   * >K. Konolige, "Sparse Sparse Bundle Adjustment", BMVC 2010.
    *
    * Frame: How is the frame/pose represented? (e.g. SE3)
    * FrameDoF: How many DoF has the pose/frame? (e.g. 6 DoF, that is
@@ -131,133 +148,211 @@ namespace RobotVision
    *         measurement)
    */
   template <typename Frame,
-  int FrameDof,
+  int FrameDoF,
   int PointParNum,
-  int PointDof,
+  int PointDoF,
   typename Obs,
   int ObsDim>
   class BundleAdjuster
   {
+  public:
 
-    typedef AbstractPrediction<Frame,FrameDof,PointParNum,PointDof,ObsDim>
+    typedef AbstractPrediction<Frame,FrameDoF,PointParNum,PointDoF,ObsDim>
         _AbsJac;
-    typedef std::vector<JacData<FrameDof, PointDof,ObsDim> >
+    typedef std::vector<JacData<FrameDoF, PointDoF,ObsDim> >
         _JacVec;
     typedef std::vector<TooN::Vector<PointParNum> >
         _PointVec;
-  public:
+
+    typedef std::list<Obs>
+        _Track;
+    typedef std::map<int,_Track >
+        _TrackMap;
+
+
+
     BundleAdjuster(){
       verbose = 0;
     }
 
     int verbose;
 
-    /**
-     * perform full BA over points and frames
-     *
-     * frame_list: set of poses/frames
-     * point_list: set of 3D points/landmarks
-     * prediction: prediction class
-     * obs_vec: set of observations
-     * num_fix_frames: number of frames fixed during observations
-     *                 (normally 1, the origin)
-     * num_fix_points: number of points fixed (normally 0)
-     * ba_params: BA parameters
-     * alternation: use approximative, but very fast optimisation by using
-     *              alternation between points and frames
-     *              (normally not good, because of very slow convergence rate)
-     */
-    void calcFull(std::vector<Frame > & frame_list,
-                  _PointVec & point_list,
-                  _AbsJac & prediction,
-                  const std::vector<Obs >  & obs_vec,
-                  const int num_fix_frames,
-                  const int num_fix_points,
-                  const BundleAdjusterParams & ba_params,
-                  bool alternation=false)
+
+    inline void SchurComp(const _Track & track,
+                          int num_fix_frames,
+                          int point_id,
+                          const std::vector<TooN::Matrix<PointDoF,FrameDoF> > & H_p,
+                          const TooN::Matrix<PointDoF,PointDoF> & inv_H_pp,
+                          const TooN::Vector<PointDoF> & t_p,
+                          std::vector<std::map<int,TooN::Matrix<FrameDoF,PointDoF> > > & T_,
+                          TooN::Vector<> & B,
+                          RowBlockMapVec<FrameDoF> & A_)
     {
-      this->num_points = point_list.size();
-      this->num_frames = frame_list.size();
-      this->num_obs = obs_vec.size();
-
-      this->num_fix_frames = num_fix_frames;
-      this->num_fix_points = num_fix_points;
-
-      this->ba_params = ba_params;
-
-      std::vector<Frame > new_frame_list(num_frames);
-      _PointVec new_point_list(num_points);
-
-      residual_vec = std::vector<TooN::Vector<ObsDim> >(num_obs);
-      jac_data_vec = _JacVec(num_obs);
-
-      typename _JacVec::iterator it_jac
-          = jac_data_vec.begin();
-      for (typename std::vector<Obs >::const_iterator it_obs=obs_vec.begin();
-      it_obs!=obs_vec.end();
-      ++it_obs, ++it_jac)
+      for (typename _Track::const_iterator it_cam = track.begin();
+      it_cam!=track.end();
+      ++it_cam)
       {
-        it_jac->frame_id = it_obs->frame_id;
-        it_jac->point_id = it_obs->point_id;
+        const Obs & id_obs = *it_cam;
+        int frame_id = id_obs.frame_id-num_fix_frames;
+        if (frame_id>=0)
+        {
+
+          TooN::Matrix<FrameDoF,PointDoF> T_pc
+              = AT(H_p,frame_id).T()*inv_H_pp;
+
+          AT(T_,point_id).insert(std::make_pair(frame_id, T_pc));
+
+          B.slice(frame_id*FrameDoF,FrameDoF)
+              -= AT(H_p,frame_id).T()*t_p;
+
+          for (typename _Track::const_iterator it_cam = track.begin();
+          it_cam!=track.end();
+          ++it_cam)
+          {
+            const Obs & id_obs2 = *it_cam;
+            int frame_id2 = id_obs2.frame_id-num_fix_frames;
+            if (frame_id2>=frame_id)
+            {
+              TooN::Matrix<FrameDoF,FrameDoF> tmp
+                  = -(T_pc*AT(H_p,frame_id2));
+
+              A_.add(tmp,frame_id,frame_id2);
+              if (frame_id!= frame_id2)
+              {
+                A_.add(tmp.T(),frame_id2,frame_id);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    inline void SchurCompUpperTriag
+        (const _Track  & track,
+         int num_fix_frames,
+         int point_id,
+         const std::vector<TooN::Matrix<PointDoF,FrameDoF> > & H_p,
+         const TooN::Matrix<PointDoF,PointDoF> & inv_H_pp,
+         const TooN::Vector<PointDoF> & t_p,
+         std::vector<std::map<int,TooN::Matrix<FrameDoF,PointDoF> > > & T_,
+         TooN::Vector<> & B,
+         RowBlockMapVec<FrameDoF> & A_)
+    {
+      for (typename _Track::const_iterator it_cam = track.begin();
+      it_cam!=track.end();
+      ++it_cam)
+      {
+        const Obs & id_obs = *it_cam;
+        int frame_id = id_obs.frame_id-num_fix_frames;
+        if (frame_id>=0)
+        {
+
+          TooN::Matrix<FrameDoF,PointDoF> T_pc
+              = AT(H_p,frame_id).T()*inv_H_pp;
+
+          AT(T_,point_id).insert(std::make_pair(frame_id, T_pc));
+
+          B.slice(frame_id*FrameDoF,FrameDoF)
+              -= AT(H_p,frame_id).T()*t_p;
+
+          for (typename _Track::const_iterator it_cam = track.begin();
+          it_cam!=track.end();
+          ++it_cam)
+          {
+            const Obs & id_obs2 = *it_cam;
+            int frame_id2 = id_obs2.frame_id-num_fix_frames;
+            if (frame_id2>=frame_id)
+            {
+              TooN::Matrix<FrameDoF,FrameDoF> tmp
+                  = -(T_pc*AT(H_p,frame_id2));
+
+              A_.add(tmp,frame_id,frame_id2);
+            }
+          }
+        }
+      }
+    }
+
+
+    double calcFast(std::vector<Frame > & frame_list,
+                    _PointVec & point_list,
+                    _AbsJac & prediction,
+                    const _TrackMap & track_list,
+                    const int num_fix_frames,
+                    const BundleAdjusterParams & ba_params,
+                    int embedded_point_iter = 0,
+                    bool use_qr= false)
+    {
+      assert(track_list.size()>0);
+      assert(point_list.size()==track_list.size());
+
+#ifndef RV_SUITESPARSE_SUPPORT
+      use_qr = false; //QR is not implemented using CSparse (yet)
+#endif
+
+
+      int num_points = point_list.size();
+      int num_frames = frame_list.size();
+
+
+
+      double chi2 = 0;
+
+      std::vector<Frame > new_frame_list(frame_list);
+      _PointVec new_point_list(point_list);
+
+      double norm_max_A = 0.;
+      for (typename _TrackMap::const_iterator it_tl = track_list.begin();
+      it_tl != track_list.end();
+      ++it_tl)
+      {
+        int point_id = it_tl->first;
+        const _Track & track = it_tl->second;
+        TooN::Vector<PointParNum> & point = AT(point_list,point_id);
+
+        for (typename _Track::const_iterator it_cam = track.begin();
+        it_cam!=track.end();
+        ++it_cam)
+        {
+          const Obs & id_obs = *it_cam;
+          Frame & frame = AT(frame_list,id_obs.frame_id);
+
+          TooN::Matrix<ObsDim,PointDoF> J_p;
+          TooN::Matrix<ObsDim,FrameDoF> J_c;
+          TooN::Vector<ObsDim> f = id_obs.obs
+                                   - prediction.map_n_bothJac(frame,
+                                                              point,
+                                                              J_c,
+                                                              J_p);
+
+          norm_max_A
+              = max(norm_max_A,
+                    max(norm_max(mulW(J_c,J_c,id_obs).diagonal_slice()),
+                        norm_max(mulW(J_p,J_p,id_obs).diagonal_slice())));
+
+          chi2 += sqrW(f,id_obs);
+        }
+      }
+      double mu = ba_params.initial_mu;
+
+
+      if (ba_params.initial_mu==-1)
+      {
+
+        mu = ba_params.tau*norm_max_A;
+
+      }
+      double final_mu = ba_params.final_mu_factor*mu;
+
+      if (verbose>0)
+      {
+        std::cout << "chi2: "<< chi2 << std::endl;
       }
 
-      getJac(frame_list, point_list, prediction, jac_data_vec);
-
-
-      double res;
-      if(ba_params.robust_kernel)
-        res = getRobustResidual(frame_list,
-                                point_list,
-                                prediction,
-                                obs_vec,
-                                residual_vec);
-      else
-        res = getResidual(frame_list,
-                          point_list,
-                          prediction,
-                          obs_vec,
-                          residual_vec);
-
-      if (isnan(res))
-      {
-        std::cerr << "res is NAN\n";
-        exit(-1);
-      }
-      if(verbose>0)
-        std::cout << "res: " << res << std::endl;
-
-      std::vector<TooN::Matrix<FrameDof,FrameDof> >
-          U(num_frames-num_fix_frames,TooN::Zeros(FrameDof,FrameDof));
-      std::vector<TooN::Vector<FrameDof> >
-          eps_frame(num_frames-num_fix_frames,TooN::Zeros(FrameDof));
-
-      std::vector<TooN::Matrix<PointDof,PointDof> >
-          V(num_points-num_fix_points,TooN::Zeros(PointDof,PointDof));
-      TooN::Vector<>  eps_point
-          = TooN::Zeros(PointDof*(num_points-num_fix_points));
-
-      calcUVeps(obs_vec,residual_vec,jac_data_vec, U,eps_frame,V,eps_point);
 
       double nu = 2;
       double eps =0.000000000000001;
       bool stop = false;
-      double mu = ba_params.mu;
-
-      if (ba_params.mu==-1)
-      {
-        double norm_max_A = norm_max(AT(U,0).diagonal_slice());
-        for (int j=1; j<num_frames-num_fix_frames; ++j)
-        {
-          norm_max_A = max(norm_max_A,norm_max(AT(U,j).diagonal_slice()));
-        }
-        for (int i=0; i<num_points-num_fix_points; ++i)
-        {
-          norm_max_A = max(norm_max_A,norm_max(AT(V,i).diagonal_slice()));
-        }
-        double tau = 0.001;
-        mu = tau*norm_max_A;
-      }
-
       for (int i_g=0; i_g<ba_params.num_iter; i_g++)
       {
         if (verbose>0)
@@ -268,272 +363,258 @@ namespace RobotVision
 
         double rho = 0; //Assign value, so the compiler is not complaining...
         do{
+
           if (verbose>0)
           {
             std::cout << "mu: " <<mu<< std::endl;
           }
 
-          TooN::Matrix<> I_muFrame = TooN::Identity(FrameDof)*mu;
-          TooN::Matrix<> I_muPoint = TooN::Identity(PointDof)*mu;
-          std::vector<TooN::Matrix<FrameDof,FrameDof> >
-              U_star(num_frames-num_fix_frames,I_muFrame);
 
-          std::vector<TooN::Matrix<PointDof,PointDof> >
-              V_inv(num_points-num_fix_points);
+          TooN::Matrix<FrameDoF,FrameDoF> muI_f = mu*TooN::Identity;
+          TooN::Matrix<PointDoF,PointDoF> muI_p = mu*TooN::Identity;
 
-          for (uint i=0; i<U_star.size(); ++i)
+          RowBlockMapVec<FrameDoF> A_(num_frames-num_fix_frames);
+          TooN::Vector<> B = TooN::Zeros(FrameDoF*(num_frames-num_fix_frames));
+
+          std::vector<TooN::Matrix<PointDoF,FrameDoF> >
+              H_p(num_frames-num_fix_frames);
+
+          std::vector<TooN::Vector<PointDoF> > t_(num_points);
+          std::vector<std::map<int,TooN::Matrix<FrameDoF,PointDoF> > >
+              T_(num_points);
+
+
+
+          for (typename _TrackMap::const_iterator it_tl = track_list.begin();
+          it_tl != track_list.end();
+          ++it_tl)
           {
-            U_star[i] += AT(U,i);
-          }
-          for (uint i=0; i<V.size(); ++i)
-          {
-            TooN::Cholesky<PointDof> Ch_V(AT(V,i)+I_muPoint);
-            V_inv[i] = Ch_V.get_inverse();
-          }
 
-          std::map<std::pair<int,int>, TooN::Matrix<FrameDof,PointDof> > W;
-          std::map<std::pair<int,int>, TooN::Matrix<FrameDof,PointDof> > Y;
+            int point_id = it_tl->first;
+            const _Track & track = it_tl->second;
+            TooN::Vector<PointParNum> & point = AT(point_list,point_id);
+            TooN::Matrix<PointDoF,PointDoF> H_pp =  muI_p;
+            TooN::Vector<PointDoF> b_p = TooN::Zeros;
 
-          typename _JacVec::const_iterator
-              jac_iter = jac_data_vec.begin();
-          for (typename std::vector<Obs >::const_iterator obs_iter
-               = obs_vec.begin();
-          obs_iter != obs_vec.end();
-          ++jac_iter, ++obs_iter)
-          {
-            const TooN::Matrix<ObsDim,PointDof> & J_point = jac_iter->J_point;
-            if(!isnan(J_point(0,0)))
+
+            for (typename _Track::const_iterator it_cam = track.begin();
+            it_cam!=track.end();
+            ++it_cam)
             {
 
-              const TooN::Matrix<ObsDim,FrameDof> & J_frame = jac_iter->J_frame;
-              if(!(isnan(J_frame(0,0))))
+
+
+              const Obs & id_obs = *it_cam;
+              Frame & frame = AT(frame_list,id_obs.frame_id);
+              int frame_id = id_obs.frame_id-num_fix_frames;
+
+
+              assert(id_obs.point_id==point_id);
+
+              TooN::Matrix<ObsDim,PointDoF> J_p;
+              TooN::Matrix<ObsDim,FrameDoF> J_c;
+
+              TooN::Vector<ObsDim> f = id_obs.obs
+                                       - prediction.map_n_bothJac(frame,
+                                                                  point,
+                                                                  J_c,
+                                                                  J_p);
+              J_c *= -1;
+              J_p *= -1;
+
+
+              if(ba_params.robust_kernel)
               {
-                TooN::Matrix<FrameDof,PointDof> tmp = J_frame.T()*J_point;
-                std::pair<int,int> id_pair = std::make_pair(obs_iter->frame_id,
-                                                            obs_iter->point_id);
-                W.insert(make_pair(id_pair,tmp));
-                Y.insert(make_pair(id_pair,tmp
-                                   *AT(V_inv,
-                                       obs_iter->point_id-num_fix_points)));
+                double nrm = std::max(0.00000000001,
+                                      sqrt(sqrW(f,id_obs)));
+                double w = sqrt(kernel(nrm,ba_params.kernel_param))/nrm;
+                f *= w;
               }
-            }
-          }
-          TooN::Vector<> delta((num_frames-num_fix_frames)*FrameDof
-                               + (num_points-num_fix_points)*PointDof);
 
-          TooN::Vector<> e(FrameDof*(num_frames-num_fix_frames));
-          if (alternation )
-          {
-            for (uint i=0; i<U_star.size(); ++i)
+              H_pp += mulW(J_p,J_p,id_obs);
+              b_p -= mulW(J_p,f,id_obs);
+              if (frame_id>=0)
+              {
+                A_.add(mulW(J_c,J_c,id_obs), muI_f, frame_id, frame_id);
+                AT(H_p,frame_id) = mulW(J_p,J_c,id_obs);
+                B.slice(frame_id*FrameDoF,FrameDoF) -= mulW(J_c,f,id_obs);
+              }
+
+            }
+
+            TooN::Cholesky<PointDoF> Ch_H_pp(H_pp);
+            TooN::Matrix<PointDoF,PointDoF> inv_H_pp = Ch_H_pp.get_inverse();
+
+            TooN::Vector<PointDoF> t_p = inv_H_pp*b_p;
+            AT(t_,point_id) = t_p;
+
+            if (use_qr)
             {
-              e.slice(i*FrameDof,FrameDof) = AT(eps_frame,i);
-              TooN::LU<FrameDof> LU_U( AT(U,i)+I_muFrame);
-              delta.slice(i*FrameDof,FrameDof) = LU_U.backsub(AT(eps_frame,i));
+              SchurComp(track,
+                        num_fix_frames,
+                        point_id,
+                        H_p,
+                        inv_H_pp,
+                        t_p,
+                        T_,
+                        B,
+                        A_);
+            }
+            else
+            {
+              SchurCompUpperTriag(track,
+                                  num_fix_frames,
+                                  point_id,
+                                  H_p,
+                                  inv_H_pp,
+                                  t_p,
+                                  T_,
+                                  B,
+                                  A_);
+            }
+
+
+          }
+
+          int matrix_type = 1;//symmetric, upper_triangle
+          if (use_qr)
+          {
+            matrix_type = 0;//unsymmetric
+          }
+          SparseMatrix<> sS(A_,matrix_type);
+
+
+          TooN::Vector<> delta((num_frames-num_fix_frames)*FrameDoF);
+
+          try{
+            SparseSolver<> Ch(sS);
+
+            delta = Ch.backsub(B);
+          }catch (NotPosSemiDefException & e) {
+            // not positive definite so increase mu and try again
+            std::cout << "Not pose Def" << std::endl;
+
+            mu *= nu;
+            nu *= 2.;
+            stop = (mu>final_mu);
+            continue;
+          }
+
+
+          for (int i=0; i<num_frames-num_fix_frames; ++i)
+          {
+            AT(new_frame_list,i+num_fix_frames)
+                = prediction.add(AT(frame_list,i+num_fix_frames),
+                                 delta.slice(i*FrameDoF,FrameDoF));
+          }
+
+          for (typename _TrackMap::const_iterator it_tl = track_list.begin();
+          it_tl != track_list.end();
+          ++it_tl)
+          {
+            int point_id = it_tl->first;
+            const _Track & track = it_tl->second;
+
+            TooN::Vector<PointDoF> dp = AT(t_,point_id);
+
+            for (typename _Track::const_iterator it_cam = track.begin();
+            it_cam!=track.end();
+            ++it_cam)
+            {
+              const Obs & id_obs = *it_cam;
+
+              int frame_id = id_obs.frame_id-num_fix_frames;
+              if (frame_id>=0)
+              {
+                dp -= AT(T_,point_id).find(frame_id)->second.T()
+                      *delta.slice(frame_id*FrameDoF,FrameDoF);
+              }
 
             }
+
+            AT(new_point_list,point_id)
+                = prediction.add(AT(point_list,point_id), dp);
+          }
+          double new_chi2 = 0;
+          if (embedded_point_iter>0)
+          {
+            new_chi2 = calcFastStructureOnly(new_frame_list,
+                                             new_point_list,
+                                             prediction,
+                                             track_list,
+                                             BundleAdjusterParams
+                                             (ba_params.robust_kernel,
+                                              ba_params.kernel_param,
+                                              embedded_point_iter,
+                                              ba_params.initial_mu,
+                                              ba_params.final_mu_factor));
           }
           else
           {
-            std::map<std::pair<int,int>, TooN::Matrix<FrameDof,FrameDof> >
-                YW_map;
-            for (uint i=0; i<U.size(); ++i)
-            {
-              TooN::Matrix<FrameDof,FrameDof> & Us = AT(U_star,i);
-              YW_map.insert(std::make_pair(std::make_pair(i,i),Us));
-            }
-            for (int j=0; j<num_frames-num_fix_frames; ++j)
-            {
-              e.slice(j*FrameDof,FrameDof) = AT(eps_frame,j);
-            }
-            for (int j=0; j<num_frames-num_fix_frames; ++j)
-            {
 
-              for (int i=0; i<num_points-num_fix_points; ++i)
+
+            for (typename _TrackMap::const_iterator it_tl = track_list.begin();
+            it_tl != track_list.end();
+            ++it_tl)
+            {
+              int point_id = it_tl->first;
+              const _Track & track = it_tl->second;
+              TooN::Vector<PointParNum> & point = AT(new_point_list,point_id);
+
+              for (typename _Track::const_iterator it_cam = track.begin();
+              it_cam!=track.end();
+              ++it_cam)
               {
-                typename std::map<std::pair<int,int>,
-                TooN::Matrix<FrameDof,PointDof> >::iterator Y_ij
-                = Y.find(std::make_pair(j+num_fix_frames,i+num_fix_points));
-                if (Y_ij!=Y.end())
-                {
-                  for (int k=0; k<num_frames-num_fix_frames; ++k)
-                  {
-                    typename std::map<std::pair<int,int>,
-                    TooN::Matrix<FrameDof,PointDof> >::iterator W_ik
-                    = W.find(std::make_pair(k+num_fix_frames,i+num_fix_points));
-                    if (W_ik!=W.end())
-                    {
-                      TooN::Matrix<FrameDof,FrameDof> YW
-                          = -(Y_ij->second) * (W_ik->second).T();
-                      typename std::map<std::pair<int,int>,
-                      TooN::Matrix<FrameDof,FrameDof> >::iterator
-                      it = YW_map.find(std::make_pair(j,k));
-                      if(it!=YW_map.end())
-                      {
-                        it->second += YW;
-                      }
-                      else
-                        YW_map.insert(std::make_pair(std::make_pair(j,k),YW));
-                    }
-                  }
+                const Obs & id_obs = *it_cam;
+                Frame & frame = AT(new_frame_list,id_obs.frame_id);
 
-                  e.slice(j*FrameDof,FrameDof)
-                      -= (Y_ij->second) * eps_point.slice(i*PointDof, PointDof);
-                }
+                TooN::Vector<ObsDim> f = id_obs.obs - prediction.map(frame,
+                                                                     point);
+                new_chi2 +=  sqrW(f,id_obs);
               }
             }
-
-#ifdef RV_USE_SPARSE_CHOLESKY
-            TooN::TripletMatrix sparseS(FrameDof*(num_frames-num_fix_frames),
-                                        FrameDof*(num_frames-num_fix_frames));
-#else
-            TooN::Matrix<> S
-                = TooN::Zeros(FrameDof*(num_frames-num_fix_frames),
-                              FrameDof*(num_frames-num_fix_frames));
-#endif
-
-            for (typename std::map<std::pair<int,int>,
-                 TooN::Matrix<FrameDof,FrameDof> >::const_iterator it
-                 = YW_map.begin(); it!=YW_map.end(); ++it)
-            {
-              const std::pair<int,int> & ids = it->first;
-              const TooN::Matrix<FrameDof,FrameDof> & YW = it->second;
-
-#ifdef RV_USE_SPARSE_CHOLESKY
-              sparseS.add(ids.first*FrameDof,ids.second*FrameDof,YW);
-#else
-              S.slice(ids.first*FrameDof,ids.second*FrameDof,FrameDof,FrameDof)
-                  = YW;
-#endif
-            }
-
-#ifdef RV_USE_SPARSE_CHOLESKY
-
-            TooN::SparseMatrix<> sS(sparseS);
-            try{
-              TooN::SparseCholesky<> Ch(sS);
-              delta.slice(0,FrameDof*(num_frames-num_fix_frames))
-                  = Ch.backsub(e);
-
-            }catch (TooN::NotPosSemiDefException & e) {
-              // not positive definite so increase mu and try again
-              mu *= nu;
-              nu *= 2.;
-              stop = (mu>999999999.f);
-              continue;
-            }
-#else
-            TooN::Cholesky<> Ch(S);
-            delta.slice(0,FrameDof*(num_frames-num_fix_frames))= Ch.backsub(e);
-#endif
           }
 
-          if (verbose>1)
-            std::cout <<"delta: " << delta << std::endl;
 
-          TooN::Vector<> g(FrameDof*(num_frames-num_fix_frames)
-                           + PointDof*(num_points-num_fix_points));
-          g.slice(0,FrameDof*(num_frames-num_fix_frames)) = e;
-
-          for (int i=0; i<num_points-num_fix_points; ++i)
-          {
-            TooN::Vector<PointDof> tmp = eps_point.slice(PointDof*i,PointDof);
-            for (int j=0; j<num_frames-num_fix_frames; ++j)
-            {
-              typename std::map<std::pair<int,int>,
-              TooN::Matrix<FrameDof,PointDof> >::iterator W_ij
-              = W.find(std::make_pair(j+num_fix_frames,i+num_fix_points));
-              if (W_ij!=W.end())
-              {
-                tmp -= W_ij->second.T() * delta.slice(j*FrameDof,FrameDof);
-              }
-            }
-            delta.slice((num_frames-num_fix_frames)
-                        *FrameDof + i*PointDof, PointDof)
-                = AT(V_inv,i) * tmp;
-            g.slice((num_frames-num_fix_frames)*FrameDof + i*PointDof, PointDof)
-                = eps_point.slice(PointDof*i,PointDof);
-          }
-
-          addToFrames(frame_list,
-                      delta.slice(0,FrameDof*(num_frames-num_fix_frames)),
-                      prediction,
-                      new_frame_list);
-
-
-          addToPoints(point_list,
-                      delta.slice(FrameDof*(num_frames-num_fix_frames),
-                                  PointDof*(num_points-num_fix_points)),
-                      prediction,
-                      new_point_list);
-
-          double res_new;
-          if(ba_params.robust_kernel)
-            res_new = getRobustResidual(new_frame_list,
-                                        new_point_list,
-                                        prediction,
-                                        obs_vec,
-                                        residual_vec);
-          else
-            res_new = getResidual(new_frame_list,
-                                  new_point_list,
-                                  prediction,
-                                  obs_vec,
-                                  residual_vec);
-
-          if (isnan(res_new))
+          if (isnan(new_chi2))
           {
             std::cerr << "res_new is NAN\n";
             exit(-1);
           }
-          rho = (res-res_new)/(delta*(mu*delta+g));
+
+          if (verbose>0)
+          {
+            std::cout << "new chi2: "<< new_chi2 << std::endl;
+          }
+          rho = (chi2-new_chi2)/(delta*(mu*delta+B));
 
           if(rho>0)
           {
-            if(verbose>0)
-              std::cout << "res_new: " << res_new << std::endl;
+            //std::cerr << mu << std::endl;
+
             frame_list = std::vector<Frame> (new_frame_list);
             point_list = _PointVec(new_point_list);
 
-            res = res_new;
+            chi2 = new_chi2;
 
-            getJac(frame_list, point_list, prediction,jac_data_vec);
-
-            U = std::vector<TooN::Matrix<FrameDof,FrameDof> >
-                (num_frames-num_fix_frames,
-                 TooN::Zeros(FrameDof,FrameDof) );
-            eps_frame =  std::vector<TooN::Vector<FrameDof> >
-                         (num_frames-num_fix_frames,
-                          TooN::Zeros(FrameDof));
-
-            V =  std::vector<TooN::Matrix<PointDof,PointDof> >
-                 (num_points-num_fix_points,
-                  TooN::Zeros(PointDof,PointDof) );
-
-            eps_point = TooN::Zeros(PointDof*(num_points-num_fix_points));
-
-            calcUVeps(obs_vec,
-                      residual_vec,
-                      jac_data_vec,
-                      U,eps_frame,
-                      V,
-                      eps_point);
-
-            stop = norm_max(g)<=eps;
+            stop = norm_max(B)<=eps;
             mu *= std::max(1./3.,1-Po3(2*rho-1));
             nu = 2.;
+
+
           }
           else
           {
             if (verbose>0)
-              std::cout << "no update: res vs.res_new "
-                  << res
+              std::cout << "no update: chi vs. new_chi2 "
+                  << chi2
                   << " vs. "
-                  << res_new
+                  << new_chi2
                   << std::endl;
             mu *= nu;
             nu *= 2.;
 
-            stop = (mu>999999999.f);
+            stop = (mu>final_mu);
           }
 
         }while(!(rho>0 ||  stop));
@@ -542,289 +623,268 @@ namespace RobotVision
           break;
 
       }
+      return chi2;
+    }
+
+
+
+
+    double calcFastStructureOnly(std::vector<Frame> & frame_list,
+                                 _PointVec & point_list,
+                                 _AbsJac & prediction,
+                                 const _TrackMap & track_list,
+                                 const BundleAdjusterParams & ba_params)
+    {
+      assert(point_list.size()==track_list.size());
+      assert(track_list.size()>0);
+      //int num_points = point_list.size();
+      double chi2_sum=0;
+      double old_chi2_sum=0;
+
+      for (typename _TrackMap
+           ::const_iterator it_tl = track_list.begin();
+      it_tl != track_list.end();
+      ++it_tl)
+      {
+
+        double nu = 2;
+        double eps =0.000000000000001;
+        bool stop = false;
+
+        int point_id = it_tl->first;
+
+
+        TooN::Vector<PointParNum> & point = AT(point_list,point_id);
+        const _Track & track = it_tl->second;
+
+        double chi2 = 0; 
+        TooN::Vector<PointParNum> new_point = point;
+
+
+
+        double norm_max_A = 0.;
+        for (typename _Track::const_iterator it_cam = track.begin();
+        it_cam!=track.end();
+        ++it_cam)
+        {
+          const Obs & id_obs = *it_cam;
+          Frame & frame = AT(frame_list,id_obs.frame_id);
+
+          TooN::Matrix<ObsDim,PointDoF> J_p;
+          TooN::Vector<ObsDim> f = id_obs.obs
+                                   - prediction.map_n_pointJac(frame,
+                                                               point,
+                                                               J_p);
+          norm_max_A
+              = max(norm_max_A,
+                    norm_max(mulW(J_p,J_p,id_obs).diagonal_slice()));
+          chi2 += sqrW(f,id_obs);
+        }
+        old_chi2_sum += chi2;
+        double mu = ba_params.initial_mu;
+
+
+        if (ba_params.initial_mu==-1)
+        {
+
+          mu = ba_params.tau*norm_max_A;
+
+        }
+        double final_mu = ba_params.final_mu_factor*mu;
+
+        for (int i_g=0; i_g<ba_params.num_iter; i_g++)
+        {
+          if (verbose>1)
+          {
+            std::cout << "iteration: "<< i_g << std::endl;
+          }
+
+
+          double rho = 0; //Assign value, so the compiler is not complaining...
+          do{
+
+            if (verbose>1)
+            {
+              std::cout << "mu: " <<mu<< std::endl;
+            }
+
+            TooN::Matrix<PointDoF,PointDoF> muI_p = mu*TooN::Identity;
+
+            TooN::Matrix<PointDoF,PointDoF> H_pp =  muI_p;
+            TooN::Vector<PointDoF> b_p = TooN::Zeros;
+
+
+            for (typename _Track::const_iterator it_cam = track.begin();
+            it_cam!=track.end();
+            ++it_cam)
+            {
+              const Obs & id_obs = *it_cam;
+              Frame & frame = AT(frame_list,id_obs.frame_id);
+              TooN::Matrix<ObsDim,PointDoF> J_p;
+
+              TooN::Vector<ObsDim> f = id_obs.obs
+                                       - prediction.map_n_pointJac(frame,
+                                                                   point,
+                                                                   J_p);
+              J_p *= -1;
+
+
+              if(ba_params.robust_kernel)
+              {
+                double nrm = std::max(0.00000000001,
+                                      sqrt(sqrW(f,id_obs)));
+                double w = sqrt(kernel(nrm,ba_params.kernel_param))/nrm;
+                f *= w;
+              }
+
+              H_pp += mulW(J_p,J_p,id_obs);
+              b_p -= mulW(J_p,f,id_obs);
+
+            }
+
+
+            TooN::Vector<PointDoF> delta_p;
+
+
+
+            TooN::Cholesky<PointDoF> Ch_H_pp(H_pp);
+
+            delta_p = Ch_H_pp.backsub(b_p);
+
+
+
+
+
+            new_point
+                = prediction.add(point, delta_p);
+            
+            double new_chi2 = 0;
+
+
+            for (typename _Track::const_iterator it_cam = track.begin();
+            it_cam!=track.end();
+            ++it_cam)
+            {
+              const Obs & id_obs = *it_cam;
+              Frame & frame = AT(frame_list,id_obs.frame_id);
+
+              TooN::Vector<ObsDim> f = id_obs.obs - prediction.map(frame,
+                                                                   new_point);
+              new_chi2 += sqrW(f,id_obs);
+            }
+
+
+            if (isnan(new_chi2))
+            {
+              std::cerr << "res_new is NAN\n";
+              exit(-1);
+            }
+            rho = (chi2-new_chi2);//(delta*(mu*delta+g));
+
+            if(rho>0)
+            {
+
+
+              point = new_point;
+
+              chi2 = new_chi2;
+
+              stop = norm_max(b_p)<=eps;
+              mu *= std::max(1./3.,1-Po3(2*rho-1));
+              nu = 2.;
+            }
+            else
+            {
+              if (verbose>1)
+                std::cout << "no update: chi vs. new_chi2 "
+                    << chi2
+                    << " vs. "
+                    << new_chi2
+                    << std::endl;
+              mu *= nu;
+              nu *= 2.;
+
+              stop = (mu>final_mu);
+            }
+
+          }while(!(rho>0 ||  stop));
+
+          if (stop)
+            break;
+
+        }
+        chi2_sum += chi2;
+
+      }
+      if (verbose>0)
+        std::cout << " chi vs. new_chi2 "
+            << old_chi2_sum
+            << " vs. "
+            << chi2_sum
+            << std::endl;
+      return chi2_sum;
 
     }
 
-    /**
-     * Struture-only BA
-     *- optimise only wrt. to points and keep frames/poses fixed
-     *
-     * frame_list: set of poses/frames
-     * point_list: set of 3D points/landmarks
-     * prediction: prediction class
-     * obs_vec: set of observations
-     * num_fix_points: number of points fixed (normally 0)
-     * ba_params: BA parameters
-     */
-    void calcStructOnly(std::vector<Frame > & frame_list,
-                        _PointVec & point_list,
-                        _AbsJac & prediction,
-                        const std::vector<Obs >  & obs_vec,
-                        const int num_fix_points,
-                        const BundleAdjusterParams & ba_params)
+
+
+
+
+    double calcFastMotionOnly(Frame  & frame,
+                              _PointVec & point_list,
+                              _AbsJac & prediction,
+                              const std::list<Obs> & obs_list,
+                              const BundleAdjusterParams & ba_params)
     {
-      this->num_points = point_list.size();
-      this->num_frames = frame_list.size();
-      this->num_obs = obs_vec.size();
+      // assert(point_list.size()==obs_list.size());
+      assert(obs_list.size()>0);
 
-      this->num_fix_frames = num_frames;
-      this->num_fix_points = num_fix_points;
 
-      this->ba_params = ba_params;
-
-       _PointVec new_point_list(num_points);
-      residual_vec = std::vector<TooN::Vector<ObsDim> >(num_obs);
-      jac_data_vec = _JacVec(num_obs);
-
-      typename _JacVec::iterator it_jac = jac_data_vec.begin();
-      for (typename std::vector<Obs >::const_iterator it_obs=obs_vec.begin();
-      it_obs!=obs_vec.end();
-      ++it_obs, ++it_jac)
-      {
-        it_jac->frame_id = it_obs->frame_id;
-        it_jac->point_id = it_obs->point_id;
-      }
-
-      getJac(frame_list, point_list,prediction, jac_data_vec);
-
-      double res;
-      if(ba_params.robust_kernel)
-        res = getRobustResidual(frame_list,
-                                point_list,
-                                prediction,
-                                obs_vec,
-                                residual_vec);
-      else
-        res = getResidual(frame_list,
-                          point_list,
-                          prediction,
-                          obs_vec,
-                          residual_vec);
-
-      if (isnan(res))
-      {
-        std::cout << "res is NAN\n";
-        exit(-1);
-      }
-
-      if(verbose>0)
-        std::cout << "res: " << res << std::endl;
-
-      std::vector<TooN::Matrix<PointDof,PointDof> >
-          V(num_points-num_fix_points,TooN::Zeros(PointDof,PointDof));
-      TooN::Vector<>  eps_point
-          = TooN::Zeros(PointDof*(num_points-num_fix_points));
-
-      calcVeps(obs_vec,residual_vec,jac_data_vec, V,eps_point);
 
       double nu = 2;
       double eps =0.000000000000001;
       bool stop = false;
 
-      double mu = ba_params.mu;
 
-      if (ba_params.mu==-1)
+      double chi2 = 0;
+
+      Frame  new_frame = frame;
+      double norm_max_A = 0.;
+      for (typename std::list<Obs>
+           ::const_iterator it_cam = obs_list.begin();
+      it_cam != obs_list.end();
+      ++it_cam)
+      {
+        int point_id = it_cam->point_id;
+
+        TooN::Vector<PointParNum> & point = AT(point_list,point_id);
+
+
+        const Obs & id_obs = *it_cam;
+
+        TooN::Matrix<ObsDim,FrameDoF> J_c;
+        TooN::Vector<ObsDim> f = id_obs.obs
+                                 - prediction.map_n_frameJac(frame,
+                                                             point,
+                                                             J_c);
+        norm_max_A = max(norm_max_A,
+                         norm_max(mulW(J_c,J_c,id_obs).diagonal_slice()));
+        chi2 += sqrW(f,id_obs);
+
+      }
+      double mu = ba_params.initial_mu;
+
+      if (verbose>0)
+      {
+        std::cout << "init. chi2: "<< chi2 << std::endl;
+      }
+      if (ba_params.initial_mu==-1)
       {
 
-        double norm_max_A = norm_max(AT(V,0).diagonal_slice());
+        mu = ba_params.tau*norm_max_A;
 
-        for (int i=1; i<num_points-num_fix_points; ++i)
-        {
-          norm_max_A = max(norm_max_A,norm_max(AT(V,i).diagonal_slice()));
-        }
-
-        double tau = 0.001;
-        mu = tau*norm_max_A;
       }
-
-
-      for (int i_g=0; i_g<ba_params.num_iter; i_g++){
-
-        if (verbose>0)
-        {
-          std::cout << "iteration: "<< i_g << std::endl;
-        }
-
-        double rho = 0; //Assign value, so the compiler is not complaining...
-        do{
-
-          if (verbose>0)
-          {
-            std::cout << "mu: " <<mu<< std::endl;
-          }
-
-          TooN::Matrix<> I_muPoint = TooN::Identity(PointDof)*mu;
-          TooN::Vector<> g(PointDof*(num_points-num_fix_points));
-
-          TooN::Vector<> delta((num_points-num_fix_points)*PointDof);
-
-          for (uint i=0; i<V.size(); ++i)
-          {
-
-            TooN::Cholesky<PointDof> Ch_V(AT(V,i)+I_muPoint);
-            delta.slice(i*PointDof, PointDof)
-                = Ch_V.backsub(eps_point.slice(PointDof*i,PointDof));
-            g.slice(i*PointDof, PointDof)
-                = eps_point.slice(PointDof*i,PointDof);
-
-          }
-
-          addToPoints(point_list,
-                      delta,
-                      prediction,
-                      new_point_list);
-
-          double res_new;
-          if(ba_params.robust_kernel)
-            res_new = getRobustResidual(frame_list,
-                                        new_point_list,
-                                        prediction,
-                                        obs_vec,
-                                        residual_vec);
-          else
-            res_new = getResidual(frame_list,
-                                  new_point_list,
-                                  prediction,
-                                  obs_vec,
-                                  residual_vec);
-
-          if (isnan(res_new))
-          {
-            std::cerr << "res_new is NAN\n";
-            exit(-1);
-          }
-
-
-          rho = (res-res_new)/(delta*(mu*delta+g));
-
-          if(rho>0)
-          {
-            if(verbose>0)
-              std::cout << "res_new: " << res_new << std::endl;
-
-            point_list = _PointVec(new_point_list);
-
-            res = res_new;
-
-            getJac(frame_list, point_list,prediction,jac_data_vec);
-
-            V =  std::vector<TooN::Matrix<PointDof,PointDof> >
-                 (num_points-num_fix_points,
-                  TooN::Zeros(PointDof,PointDof) );
-
-            eps_point = TooN::Zeros(PointDof*(num_points-num_fix_points));
-
-            calcVeps(obs_vec,residual_vec,jac_data_vec, V,eps_point);
-
-            stop = norm_max(g)<=eps;
-            mu *= std::max(1./3.,1-Po3(2*rho-1));
-            nu = 2.;
-          }
-          else
-          {
-            if (verbose>0)
-              std::cout << "no update: res vs.res_new "
-                  << res << " vs. " << res_new << std::endl;
-            mu *= nu;
-            nu *= 2.;
-
-            stop = (mu>999999999.f);
-          }
-
-        }while(!(rho>0 ||  stop));
-
-        if (stop)
-          break;
-      }
-    }
-
-
-    /**
-     * Motion-only BA
-     * - optimise only wrt. to frames/poses and keep points fixed
-     *
-     * frame_list: set of poses/frames
-     * point_list: set of 3D points/landmarks
-     * prediction: prediction class
-     * obs_vec: set of observations
-     * num_fix_frames: number of frames fixed during observations
-     *                 (normally 0)
-     * ba_params: BA parameters
-     */
-    void calcMotionOnly(std::vector<Frame > & frame_list,
-                        _PointVec & point_list,
-                        _AbsJac & prediction,
-                        const std::vector<Obs>  & obs_vec,
-                        const int num_fix_frames,
-                        const BundleAdjusterParams & ba_params)
-    {
-      this->num_points = point_list.size();
-      this->num_frames = frame_list.size();
-      this->num_obs = obs_vec.size();
-
-      this->num_fix_frames = num_fix_frames;
-      this->num_fix_points = num_points;
-
-      this->ba_params = ba_params;
-
-      std::vector<Frame > new_frame_list(num_frames);
-
-      residual_vec = std::vector<TooN::Vector<ObsDim> >(num_obs);
-      jac_data_vec = _JacVec(num_obs);
-
-      typename _JacVec::iterator it_jac = jac_data_vec.begin();
-      for (typename std::vector<Obs >::const_iterator it_obs=obs_vec.begin();
-      it_obs!=obs_vec.end();
-      ++it_obs, ++it_jac)
-      {
-        it_jac->frame_id = it_obs->frame_id;
-        it_jac->point_id = it_obs->point_id;
-      }
-
-      getJac(frame_list, point_list,prediction, jac_data_vec);
-
-      double res;
-      if(ba_params.robust_kernel)
-        res = getRobustResidual(frame_list,
-                                point_list,
-                                prediction,
-                                obs_vec,
-                                residual_vec);
-      else
-        res = getResidual(frame_list,
-                          point_list,
-                          prediction,
-                          obs_vec,
-                          residual_vec);
-
-      if (isnan(res))
-      {
-        std::cerr << "res is NAN\n";
-        exit(-1);
-      }
-
-      if(verbose>0)
-        std::cout << "res: " << res << std::endl;
-
-      std::vector<TooN::Matrix<FrameDof,FrameDof> >
-          U(num_frames-num_fix_frames,TooN::Zeros(FrameDof,FrameDof));
-      std::vector<TooN::Vector<FrameDof> >
-          eps_frame(num_frames-num_fix_frames,TooN::Zeros(FrameDof));
-
-      calcUeps(obs_vec,residual_vec,jac_data_vec, U,eps_frame);
-
-      double norm_max_A = norm_max(AT(U,0).diagonal_slice());
-
-      for (int j=1; j<num_frames-num_fix_frames; ++j)
-      {
-        norm_max_A = max(norm_max_A,norm_max(AT(U,j).diagonal_slice()));
-      }
-
-      double nu = 2;
-      double eps =0.000000000000001;
-      bool stop = false;
-      double tau = 0.001;
-      double mu = tau*norm_max_A;
+      double final_mu = ba_params.final_mu_factor*mu;
 
       for (int i_g=0; i_g<ba_params.num_iter; i_g++)
       {
@@ -833,104 +893,136 @@ namespace RobotVision
           std::cout << "iteration: "<< i_g << std::endl;
         }
 
+
         double rho = 0; //Assign value, so the compiler is not complaining...
         do{
+
           if (verbose>0)
           {
             std::cout << "mu: " <<mu<< std::endl;
           }
 
-          TooN::Matrix<> I_muFrame = TooN::Identity(FrameDof)*mu;
 
-          std::vector<TooN::Matrix<FrameDof,FrameDof> >
-              U_star(num_frames-num_fix_frames,I_muFrame);
 
-          for (uint i=0; i<U_star.size(); ++i)
+
+          TooN::Vector<FrameDoF> B = TooN::Zeros;
+
+
+          TooN::Matrix<FrameDoF,FrameDoF> A = mu*TooN::Identity;
+
+          for (typename std::list<Obs>
+               ::const_iterator it_cam = obs_list.begin();
+          it_cam != obs_list.end();
+          ++it_cam)
           {
-            U_star[i] += AT(U,i);
+            int point_id = it_cam->point_id;
+
+            TooN::Vector<PointParNum> & point = AT(point_list,point_id);
+
+
+
+
+            const Obs & id_obs = *it_cam;
+
+
+
+            TooN::Matrix<ObsDim,FrameDoF> J_c;
+
+            TooN::Vector<ObsDim> f = id_obs.obs
+                                     - prediction.map_n_frameJac(frame,
+                                                                 point,
+                                                                 J_c);
+            J_c *= -1;
+
+            if(ba_params.robust_kernel)
+            {
+              double nrm = std::max(0.00000000001,
+                                    sqrt(sqrW(f,id_obs)));
+              double w = sqrt(kernel(nrm,ba_params.kernel_param))/nrm;
+              f *= w;
+            }
+
+
+
+            A += mulW(J_c,J_c,id_obs);
+            B.slice(0,FrameDoF) -= mulW(J_c,f,id_obs);
+
+
           }
 
-          TooN::Matrix<> S = TooN::Zeros(FrameDof*(num_frames-num_fix_frames),
-                                         FrameDof*(num_frames-num_fix_frames));
-          TooN::Vector<> g(FrameDof*(num_frames-num_fix_frames));
-          for (uint i=0; i<U.size(); ++i)
+
+
+          TooN::Vector<FrameDoF> delta;
+
+          TooN::Cholesky<FrameDoF> Ch(A);
+
+          delta = Ch.backsub(B);
+
+          //          std::cout<< A << std::endl<< std::endl;
+          //          std::cout<< B << std::endl<< std::endl;
+
+
+
+          //std::cout<< delta << std::endl<< std::endl;
+
+
+
+          new_frame
+              = prediction.add(frame,delta);
+
+
+          double new_chi2 = 0;
+          for (typename std::list<Obs>
+               ::const_iterator it_cam = obs_list.begin();
+          it_cam != obs_list.end();
+          ++it_cam)
           {
-            S.slice(i*FrameDof,i*FrameDof,FrameDof,FrameDof) = AT(U_star,i);
+            int point_id = it_cam->point_id;
+
+            TooN::Vector<PointParNum> & point = AT(point_list,point_id);
+
+
+            const Obs & id_obs = *it_cam;
+
+
+            TooN::Vector<ObsDim> f = id_obs.obs - prediction.map(new_frame,
+                                                                 point);
+            new_chi2 += sqrW(f,id_obs);
+
           }
 
-          TooN::Vector<> delta((num_frames-num_fix_frames)*FrameDof);
-
-          for (uint i=0; i<U_star.size(); ++i)
-          {
-            g.slice(i*FrameDof,FrameDof) = AT(eps_frame,i);
-
-            TooN::LU<FrameDof> LU_U( AT(U,i)+I_muFrame);
-            delta.slice(i*FrameDof,FrameDof) = LU_U.backsub(AT(eps_frame,i));
-
-            g.slice(i*FrameDof,FrameDof) = AT(eps_frame,i);
-
-          }
-
-          addToFrames(frame_list,
-                      delta,
-                      prediction,
-                      new_frame_list);
-
-          double res_new;
-          if(ba_params.robust_kernel)
-            res_new = getRobustResidual(new_frame_list,
-                                        point_list,
-                                        prediction,
-                                        obs_vec,
-                                        residual_vec);
-          else
-            res_new = getResidual(new_frame_list,
-                                  point_list,
-                                  prediction,
-                                  obs_vec,
-                                  residual_vec);
-
-          if (isnan(res_new))
+          if (isnan(new_chi2))
           {
             std::cerr << "res_new is NAN\n";
             exit(-1);
           }
-
-          rho = (res-res_new)/(delta*(mu*delta+g));
+          rho = (chi2-new_chi2)/(delta*(mu*delta+B));
 
           if(rho>0)
           {
-            if(verbose>0)
-              std::cout << "res_new: " << res_new << std::endl;
-
-            frame_list = std::vector<Frame> (new_frame_list);
-
-            res = res_new;
-
-            getJac(frame_list, point_list,prediction,jac_data_vec);
+            //std::cerr << mu << std::endl;
 
 
-            U = std::vector<TooN::Matrix<FrameDof,FrameDof> >
-                (num_frames-num_fix_frames,
-                 TooN::Zeros(FrameDof,FrameDof) );
-            eps_frame =  std::vector<TooN::Vector<FrameDof> >
-                         (num_frames-num_fix_frames,
-                          TooN::Zeros(FrameDof));
-            calcUeps(obs_vec,residual_vec,jac_data_vec, U,eps_frame);
+            frame = new_frame;
 
-            stop = norm_max(g)<=eps;
+            chi2 = new_chi2;
+
+            stop = norm_max(B)<=eps;
             mu *= std::max(1./3.,1-Po3(2*rho-1));
             nu = 2.;
           }
           else
           {
             if (verbose>0)
-              std::cout << "no update: res vs.res_new "
-                  << res << " vs. " << res_new << std::endl;
+              std::cout << "no update: chi vs. new_chi2 "
+                  << chi2
+                  << " vs. "
+                  << new_chi2
+                  << std::endl;
             mu *= nu;
             nu *= 2.;
 
-            stop = (mu>999999999.f);
+            stop = (mu>final_mu);
           }
 
         }while(!(rho>0 ||  stop));
@@ -938,8 +1030,12 @@ namespace RobotVision
         if (stop)
           break;
 
+
       }
+      return chi2;
     }
+
+
 
 
 
@@ -962,25 +1058,25 @@ namespace RobotVision
      * obs_vec: set of observations
      * ba_params: BA parameters
      */
-    void filterSingleFeatureOnly(Frame & frame,
-                                 TooN::Vector<PointParNum>  & point,
-                                 TooN::Matrix<PointDof,PointDof> & Lambda,
-                                 _AbsJac& prediction,
-                                 const TooN::Vector<ObsDim> & obs,
-                                 const BundleAdjusterParams & ba_params)
+    double filterSingleFeatureOnly(Frame & frame,
+                                   TooN::Vector<PointParNum>  & point,
+                                   TooN::Matrix<PointDoF,PointDoF> & Lambda,
+                                   _AbsJac& prediction,
+                                   const TooN::Vector<ObsDim> & obs,
+                                   const BundleAdjusterParams & ba_params)
     {
 
       TooN::Vector<PointParNum> point_mean = point;
 
       TooN::Vector<ObsDim> residuals;
 
-      TooN::Vector<PointDof> residuals_dist(PointDof);
+      TooN::Vector<PointDoF> residuals_dist(PointDoF);
 
-      this->ba_params = ba_params;
+      //this->ba_params = ba_params;
 
-      TooN::Vector<PointDof>  new_point;
+      TooN::Vector<PointDoF>  new_point;
 
-      TooN::Matrix<ObsDim,PointDof> J_point = prediction.pointJac(frame, point);
+      TooN::Matrix<ObsDim,PointDoF> J_point = prediction.pointJac(frame, point);
 
       TooN::Vector<ObsDim> delta_obs = obs - prediction.map(frame, point);
 
@@ -1003,22 +1099,25 @@ namespace RobotVision
       if(verbose>0)
         std::cout << "res: " << res << std::endl;
 
-      TooN::Matrix<PointDof,PointDof> V = J_point.T() * J_point;
-      TooN::Vector<PointDof> g= J_point.T() * residuals;
+      TooN::Matrix<PointDoF,PointDoF> V = J_point.T() * J_point;
+      TooN::Vector<PointDoF> g= J_point.T() * residuals;
       g += residuals_dist;
 
       double nu = 2;
       double eps =0.000000000000001;
       bool stop = false;
-      double mu = ba_params.mu;
+      double mu = ba_params.initial_mu;
 
-      if (ba_params.mu==-1)
+
+      if (ba_params.initial_mu==-1)
       {
         double norm_max_A = norm_max(V.diagonal_slice());
 
-        double tau = 0.001;
-        mu = tau*norm_max_A;
+
+        mu = ba_params.tau*norm_max_A;
+
       }
+      double final_mu = ba_params.final_mu_factor*mu;
 
       for (int i_g=0; i_g<ba_params.num_iter; i_g++)
       {
@@ -1033,10 +1132,10 @@ namespace RobotVision
             std::cout << "mu: " <<mu<< std::endl;
           }
 
-          TooN::Matrix<PointDof,PointDof> H = Lambda+ V;
+          TooN::Matrix<PointDoF,PointDoF> H = Lambda+ V;
           H.diagonal_slice() += TooN::Ones(H.num_cols())*mu ;
 
-          TooN::Cholesky<PointDof> Ch_h(H);
+          TooN::Cholesky<PointDoF> Ch_h(H);
 
           TooN::Vector<> delta = Ch_h.backsub(g);
 
@@ -1049,8 +1148,8 @@ namespace RobotVision
 
           residuals = delta_obs;
 
-          TooN::Vector<PointDof> diff = (point_mean-new_point);
-          TooN::Vector<PointDof> LambdaDiff
+          TooN::Vector<PointDoF> diff = (point_mean-new_point);
+          TooN::Vector<PointDoF> LambdaDiff
               = Lambda*diff;
 
           residuals_dist  = LambdaDiff;
@@ -1093,7 +1192,7 @@ namespace RobotVision
             if (verbose)
               std::cout << "mu" << mu << std::endl;
 
-            stop = (mu>999999999.f);
+            stop = (mu>final_mu);
           }
 
         }while(!(rho>0 ||  stop));
@@ -1104,374 +1203,92 @@ namespace RobotVision
       }
 
       Lambda += V;
+      return res;
     }
 
   protected:
-    void getJac(const std::vector<Frame > & frame_list,
-                const _PointVec & point_list,
-                const _AbsJac & prediction,
-                std::vector<JacData<FrameDof,PointDof,ObsDim> > & jac_data_vec)
-    {
-      TooN::Matrix<ObsDim,PointDof> J_point;
-      TooN::Matrix<ObsDim,FrameDof> J_frame;
-
-      for (typename _JacVec::iterator jac_iter = jac_data_vec.begin();
-      jac_iter!=jac_data_vec.end(); ++jac_iter)
-      {
-        int i_p = jac_iter->point_id;
-        int i_f = jac_iter->frame_id;
-
-        const TooN::Vector<PointParNum> & point = AT(point_list,i_p);
-        const Frame & frame = AT(frame_list,i_f);
-
-        if ((int)i_f>=num_fix_frames)
-        {
-          jac_iter->J_frame = prediction.frameJac(frame, point);
-        }
-
-        if ((int)i_p>=num_fix_points)
-        {
-          jac_iter->J_point = prediction.pointJac(frame, point);
-        }
-      }
-    }
-
-
-    /** standard residual function */
-    double getResidual(const std::vector<Frame > & frame_list,
-                       const _PointVec & point_list,
-                       const _AbsJac & prediction,
-                       const std::vector<IdObs<ObsDim> >  & obs_vec,
-                       std::vector<TooN::Vector<ObsDim> > & residual_vec)
-    {
-      double sum = 0;
-      typename std::vector<TooN::Vector<ObsDim> >::iterator residual_iter
-          = residual_vec.begin();
-      for (typename std::vector<Obs>::const_iterator obs_iter=obs_vec.begin();
-      obs_iter!=obs_vec.end();
-      ++obs_iter, ++residual_iter)
-      {
-        int i_p = obs_iter->point_id;
-        int i_f = obs_iter->frame_id;
-        const TooN::Vector<PointParNum> & point= AT(point_list,i_p);
-        const Frame & frame = AT(frame_list,i_f);
-        TooN::Vector<ObsDim> delta
-            = obs_iter->obs - prediction.map(frame, point);
-        sum +=  delta*delta;
-        *residual_iter = delta;
-      }
-      return sum;
-    }
-
-
-    /** residual function using inverse observation uncertainty Lambda*/
-    double getResidual(const std::vector<Frame > & frame_list,
-                       const _PointVec & point_list,
-                       const _AbsJac & prediction,
-                       const std::vector<IdObsLambda<ObsDim> >  & obs_vec,
-                       std::vector<TooN::Vector<ObsDim> > & residual_vec)
-    {
-      double sum = 0;
-      typename std::vector<TooN::Vector<ObsDim> >::iterator residual_iter
-          = residual_vec.begin();
-      for (typename std::vector<Obs>::const_iterator obs_iter=obs_vec.begin();
-      obs_iter!=obs_vec.end();
-      ++obs_iter, ++residual_iter)
-      {
-        int i_p = obs_iter->point_id;
-        int i_f = obs_iter->frame_id;
-        const TooN::Vector<PointParNum> & point= AT(point_list,i_p);
-        const Frame & frame = AT(frame_list,i_f);
-        TooN::Vector<ObsDim> delta
-            = obs_iter->obs - prediction.map(frame, point);
-        sum +=  delta*obs_iter->lambda*delta;
-        *residual_iter = delta;
-      }
-      return sum;
-    }
-
-
-    /** residual function using robust kernel*/
-    double getRobustResidual(const std::vector<Frame > & frame_list,
-                             const _PointVec & point_list,
-                             const _AbsJac & prediction,
-                             const std::vector<IdObs<ObsDim> >  & obs_vec,
-                             std::vector<TooN::Vector<ObsDim> > & residual_vec)
-    {
-      double sum = 0;
-
-      typename std::vector<TooN::Vector<ObsDim> >::iterator residual_iter
-          = residual_vec.begin();
-
-      for (typename std::vector<Obs>::const_iterator obs_iter=obs_vec.begin();
-      obs_iter!=obs_vec.end();
-      ++obs_iter, ++residual_iter)
-      {
-        int i_p = obs_iter->point_id;
-        int i_f = obs_iter->frame_id;
-        const TooN::Vector<PointParNum> & point= AT(point_list,i_p);
-        const Frame & frame = AT(frame_list,i_f);
-        TooN::Vector<ObsDim> delta
-            = obs_iter->obs - prediction.map(frame, point);
-        double sum_2=0;
-
-        for (uint i=0; i<ObsDim;++i)
-        {
-          sum_2 += Po2(delta[i]);
-        }
-        double nrm = std::max(0.00000000001,sqrt(sum_2));
-        double w = sqrt(kernel(nrm))/nrm;
-
-        TooN::Vector<ObsDim> delta_r;
-        for (uint i=0; i<ObsDim;++i)
-        {
-          delta_r[i] = w*delta[i];
-        }
-        sum +=  delta_r*delta_r;
-        *residual_iter = delta_r;
-      }
-      return sum;
-    }
-
-
-    /** residual function using robust kernel and inverse covariance Lambda*/
-    double getRobustResidual(const std::vector<Frame > & frame_list,
-                             const _PointVec & point_list,
-                             const _AbsJac & prediction,
-                             const std::vector<IdObsLambda<ObsDim> >  & obs_vec,
-                             std::vector<TooN::Vector<ObsDim> > & residual_vec)
-    {
-      double sum = 0;
-      typename std::vector<TooN::Vector<ObsDim> >::iterator residual_iter
-          = residual_vec.begin();
-
-      for (typename std::vector<Obs>::const_iterator obs_iter=obs_vec.begin();
-      obs_iter!=obs_vec.end();
-      ++obs_iter, ++residual_iter)
-      {
-        int i_p = obs_iter->point_id;
-        int i_f = obs_iter->frame_id;
-        const TooN::Vector<PointParNum> & point= AT(point_list,i_p);
-        const Frame & frame = AT(frame_list,i_f);
-
-        TooN::Vector<ObsDim> delta
-            = obs_iter->obs - prediction.map(frame, point);
-
-        double sum_2=0;
-
-        for (uint i=0; i<ObsDim;++i)
-        {
-          sum_2 += Po2(delta[i]);
-        }
-
-        double nrm = std::max(0.00000000001,sqrt(sum_2));
-        double w = sqrt(kernel(nrm))/nrm;
-
-        TooN::Vector<2> delta_r;
-        for (uint i=0; i<ObsDim;++i)
-        {
-          delta_r[i] = w*delta[i];
-        }
-        sum +=  delta_r*obs_iter->lambda*delta_r;
-        *residual_iter = delta_r;
-      }
-      return sum;
-    }
-
 
     /** pseudo-huber cost function */
-    double kernel(double delta)
+    double kernel(double delta, double kernel_param)
     {
-      double b = ba_params.kernel_param;
+      double b = kernel_param;
       return fabs(2*Po2(b)*(sqrt(1+Po2(delta/b))-1));
     }
 
 
-    /** incremental updates of points */
-    void addToPoints(const _PointVec & point_list,
-                     const TooN::Vector<> & delta,
-                     const _AbsJac & prediction,
-                     _PointVec & new_point_list)
+
+
+    template <int Trans1DoF, int Trans2DoF>
+        inline TooN::Matrix<Trans1DoF,Trans2DoF>
+        mulW(const TooN::Matrix<ObsDim,Trans1DoF> & J_trans1,
+             const TooN::Matrix<ObsDim,Trans2DoF> &  J_trans2,
+             const IdObs<ObsDim> & obs )
     {
-      int i_par = 0;
-
-
-      for (int i_p=0; i_p<num_fix_points; ++i_p){
-        AT(new_point_list,i_p) = AT(point_list,i_p);
-      }
-      for (int i_p=num_fix_points; i_p<num_points; ++i_p){
-
-        AT(new_point_list,i_p)
-            =  prediction.add(AT(point_list,i_p),delta.slice(i_par,PointDof));
-        i_par+=PointDof;
-      }
-      assert(i_par==delta.size());
+      return J_trans1.T() * J_trans2;
     }
 
 
-    /** incremental updates of frames */
-    void addToFrames(const std::vector<Frame > & frame_list,
-                     const TooN::Vector<> & delta,
-                     const _AbsJac & prediction,
-                     std::vector<Frame > & new_frame_list)
+    template <int Trans1DoF, int Trans2DoF>
+        inline TooN::Matrix<Trans1DoF,Trans2DoF>
+        mulW(const TooN::Matrix<ObsDim,Trans1DoF> & J_trans1,
+             const TooN::Matrix<ObsDim,Trans2DoF> & J_trans2,
+             const IdObsLambda<ObsDim> & obs )
     {
-      int i_par = 0;
-
-      for (int i_f=0;i_f<num_fix_frames;++i_f)
-      {
-        AT(new_frame_list,i_f) = AT(frame_list,i_f);
-      }
-      for (int i_f=num_fix_frames;i_f<num_frames;++i_f){
-        AT(new_frame_list,i_f)
-            = prediction.add((AT(frame_list,i_f)), delta.slice(i_par,FrameDof));
-
-        i_par+=FrameDof;
-      }
-      assert(i_par==delta.size());
+      return J_trans1.T() * obs.lambda *J_trans2;
     }
 
 
-    void calcVeps(const std::vector<Obs >  & obs_vec,
-                  const std::vector<TooN::Vector<ObsDim> >  & residual_vec,
-                  const _JacVec & jac_data_vec,
-                  std::vector<TooN::Matrix<PointDof,PointDof> > & V,
-                  TooN::Vector<>  & eps_point)
+    template <int TransDoF>
+        inline TooN::Vector<TransDoF>
+        mulW(const TooN::Matrix<ObsDim,TransDoF> & J_trans,
+             const TooN::Vector<ObsDim> & f,
+             const IdObs<ObsDim> & obs )
     {
-      typename  std::vector<Obs >::const_iterator obs_iter = obs_vec.begin();
-      typename _JacVec::const_iterator
-          jac_iter = jac_data_vec.begin();
-
-      for (typename std::vector<TooN::Vector<ObsDim> >::const_iterator err_iter
-           = residual_vec.begin();
-      err_iter != residual_vec.end();
-      ++err_iter , ++jac_iter, ++obs_iter)
-      {
-        int point_id = obs_iter->point_id - num_fix_points;
-        if (point_id>=0)
-        {
-          const TooN::Matrix<ObsDim,PointDof> & J_point = jac_iter->J_point;
-          AT(V,point_id) += J_point.T() * J_point;
-          eps_point.slice(point_id*PointDof,PointDof) += J_point.T() * (*err_iter);
-        }
-      }
-
+      return J_trans.T() * f;
     }
 
-
-    void calcUeps(const std::vector<Obs >  & obs_vec,
-                  const std::vector<TooN::Vector<ObsDim> >  & residual_vec,
-                  const _JacVec & jac_data_vec,
-                  std::vector<TooN::Matrix<FrameDof,FrameDof> >  & U,
-                  std::vector<TooN::Vector<FrameDof> >  & eps_frame)
+    template <int TransDoF>
+        inline TooN::Vector<TransDoF>
+        mulW(const TooN::Matrix<ObsDim,TransDoF> & J_trans,
+             const TooN::Vector<ObsDim> & f,
+             const IdObsLambda<ObsDim> & obs )
     {
-      typename std::vector<Obs >::const_iterator obs_iter = obs_vec.begin();
-      typename _JacVec::const_iterator jac_iter = jac_data_vec.begin();
-
-      for (typename std::vector<TooN::Vector<ObsDim> >::const_iterator err_iter
-           = residual_vec.begin();
-      err_iter != residual_vec.end();
-      ++err_iter , ++jac_iter, ++obs_iter)
-      {
-        int frame_id = obs_iter->frame_id - num_fix_frames;
-
-        if(frame_id>=0)
-        {
-          const TooN::Matrix<ObsDim,FrameDof> & J_frame = jac_iter->J_frame;
-          AT(U,frame_id) += J_frame.T() * J_frame;
-          AT(eps_frame,frame_id) += J_frame.T() * (*err_iter);
-        }
-      }
+      return J_trans.T() * obs.lambda * f;
     }
 
-
-    void calcUVeps(const std::vector<IdObs<ObsDim>  >  & obs_vec,
-                   const std::vector<TooN::Vector<ObsDim> >  & residual_vec,
-                   const _JacVec & jac_data_vec,
-                   std::vector<TooN::Matrix<FrameDof,FrameDof> >  & U,
-                   std::vector<TooN::Vector<FrameDof> >  & eps_frame,
-                   std::vector<TooN::Matrix<PointDof,PointDof> > & V,
-                   TooN::Vector<>  & eps_point)
+    inline double
+        sqrW(const TooN::Vector<ObsDim> & f,
+             const IdObs<ObsDim> & obs )
     {
-      typename std::vector<Obs >::const_iterator obs_iter = obs_vec.begin();
-      typename _JacVec::const_iterator jac_iter = jac_data_vec.begin();
+      return f * f;
+    }
 
-      for (typename std::vector<TooN::Vector<ObsDim> >::const_iterator err_iter
-           = residual_vec.begin();
-      err_iter != residual_vec.end();
-      ++err_iter , ++jac_iter, ++obs_iter)
-      {
-        int frame_id = obs_iter->frame_id - num_fix_frames;
-        int point_id = obs_iter->point_id - num_fix_points;
-        if(frame_id>=0)
-        {
-          const TooN::Matrix<ObsDim,FrameDof> & J_frame = jac_iter->J_frame;
-          AT(U,frame_id) += J_frame.T() * J_frame;
-          AT(eps_frame,frame_id) += J_frame.T() * (*err_iter);
-        }
-        if (point_id>=0)
-        {
-          const TooN::Matrix<ObsDim,PointDof> & J_point = jac_iter->J_point;
-          AT(V,point_id) += J_point.T() * J_point;
-          eps_point.slice(point_id*PointDof,PointDof) += J_point.T() * (*err_iter);
-        }
-      }
-
+    inline double
+        sqrW(const TooN::Vector<ObsDim> & f,
+             const IdObsLambda<ObsDim> & obs )
+    {
+      return f * obs.lambda * f;
     }
 
 
 
 
-    void calcUVeps(const std::vector<IdObsLambda<ObsDim> >  & obs_vec,
-                   const std::vector<TooN::Vector<ObsDim> >  & residual_vec,
-                   const _JacVec & jac_data_vec,
-                   std::vector<TooN::Matrix<FrameDof,FrameDof> >  & U,
-                   std::vector<TooN::Vector<FrameDof> >  & eps_frame,
-                   std::vector<TooN::Matrix<PointDof,PointDof> > & V,
-                   TooN::Vector<>  & eps_point)
-    {
-      typename std::vector<IdObsLambda<ObsDim> >::const_iterator obs_iter
-          = obs_vec.begin();
-      typename _JacVec::const_iterator jac_iter = jac_data_vec.begin();
-
-      for (typename std::vector<TooN::Vector<ObsDim> >::const_iterator err_iter
-           = residual_vec.begin();
-      err_iter != residual_vec.end();
-      ++err_iter , ++jac_iter, ++obs_iter)
-      {
-        int frame_id = obs_iter->frame_id - num_fix_frames;
-        int point_id = obs_iter->point_id - num_fix_points;
-        if(frame_id>=0)
-        {
-          const TooN::Matrix<ObsDim,FrameDof> & J_frame = jac_iter->J_frame;
-          AT(U,frame_id) += J_frame.T() * obs_iter->lambda * J_frame;
-          AT(eps_frame,frame_id)
-              += J_frame.T() * obs_iter->lambda * (*err_iter);
 
 
-        }
-        if (point_id>=0)
-        {
-          const TooN::Matrix<ObsDim,PointDof> & J_point = jac_iter->J_point;
-          AT(V,point_id) += J_point.T() * obs_iter->lambda * J_point;
-          eps_point.slice(point_id*PointDof,PointDof)
-              += J_point.T() * obs_iter->lambda * (*err_iter);
-        }
-      }
-    }
 
 
-    _JacVec jac_data_vec;
-    std::vector<TooN::Vector<ObsDim> > residual_vec;
-    BundleAdjusterParams  ba_params;
 
-    int num_points;
-    int num_frames;
-    int num_obs;
-    int num_fix_frames;
-    int num_fix_points;
   };
 
+  typedef BundleAdjuster<TooN::SE3<>,6,3,3,IdObs<2>,2> BA_SE3_XYZ;
+  typedef BundleAdjuster<TooN::SE3<>,6,4,3,IdObs<2>,2> BA_SE3_XYZW;
+  typedef BundleAdjuster<TooN::SE3<>,6,3,3,IdObs<2>,2> BA_SE3_XYZ_Lambda;
+  typedef BundleAdjuster<TooN::SE3<>,6,4,3,IdObs<2>,2> BA_SE3_XYZW_Lambda;
+  typedef BundleAdjuster<TooN::SE3<>,6,3,3,IdObs<3>,3> BA_SE3_XYZ_STEREO;
+
+
 }
+
 
 #undef AT
 

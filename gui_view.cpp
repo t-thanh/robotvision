@@ -1,4 +1,4 @@
-/**
+  /**
  * @author  Hauke Strasdat, Steven Lovegrove
  *
  * Copyright (C) 2010  Hauke Strasdat, Steven Lovegrove,
@@ -59,18 +59,17 @@ void GuiView::activate2D()
   glEnable (GL_LINE_SMOOTH);
   glEnable (GL_BLEND);
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glHint (GL_LINE_SMOOTH_HINT, GL_DONT_CARE);
+  glHint (GL_LINE_SMOOTH_HINT, GL_NICEST);
   glLineWidth (1);
 
   activate();
 
   glMatrixMode (GL_PROJECTION);
   glLoadIdentity ();
-  ::glOrtho (0, pixel_size.x, pixel_size.y, 0, 0, 1);
+  ::glOrtho (0, pixel_size[0], pixel_size[1], 0, 0, 1);
 
   glMatrixMode (GL_MODELVIEW);
   glLoadIdentity();
-
 
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_LIGHTING);
@@ -103,8 +102,8 @@ void GuiView::activate3D(const SE3<double> & T_wc)
 
   left = -nr * px / fu;
   top = nr * py / fv;
-  right = nr * ( pixel_size.x - px ) / fu;
-  bottom = -nr * ( pixel_size.y - py ) / fv;
+  right = nr * ( pixel_size[0] - px ) / fu;
+  bottom = -nr * ( pixel_size[1] - py ) / fv;
 
   ::glFrustum( left, right, bottom, top, nr, fr );
 

@@ -27,7 +27,7 @@
 
 #include "maths_utils.h"
 #include "sim3.h"
-#include <assert.h>
+#include <cassert>
 #include <limits>
 
 using namespace std;
@@ -78,7 +78,7 @@ namespace RobotVision
     {
       sum += fabs(v[i]);
     }
-    return sqrt(sum);
+    return sum;
   }
 
   double norm_max(const Vector<> & v)

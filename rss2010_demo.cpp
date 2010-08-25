@@ -50,6 +50,7 @@ const int NUM_PYR_LEVELS = 1;
 
 typedef std::map<int, TooN::Vector<2> >  IdObsMap;
 
+
 class StructObs
 {
 public:
@@ -263,7 +264,7 @@ void figure2()
 {
   bool show_odom = true;
   bool show_sim3 = true;
-  bool show_se3 = true;
+  bool show_se3 = false;
 
   int image_width = 640;
   int image_height = 480;
@@ -392,6 +393,9 @@ void figure2()
   }
   fp_in.close();
 
+
+  int trans_id = 0;
+
   vector<SE3<> > cor_pose_vec;
 
   vector<Sim3<> > trans7_list;
@@ -399,23 +403,24 @@ void figure2()
 
   list<Constraint<SE3<>,6> > se3_list;
   list<Constraint<Sim3<>,7> > sim3_list;
-
-  vector<SE3<> > trans6_list;
   vector<SE3<> > updated_trans6_list;
+  vector<SE3<> > trans6_list;
 
 
   trans7_list.push_back(sim_vec[loop_id]);
   trans6_list.push_back(pose_vec[loop_id]);
 
-  int trans_id = 0;
+
   //compute relative constraints
   for (uint i=loop_id+1; i<pose_vec.size()-1; ++i)
   {
     trans7_list.push_back(sim_vec[i]);
     trans6_list.push_back(pose_vec[i]);
 
+
     Matrix<6,6> inf6 = TooN::Identity;
     Matrix<7,7> inf7 = TooN::Identity;
+
 
     se3_list.push_back(Constraint<SE3<>,6 >(trans_id,
                                             trans_id+1,
@@ -448,12 +453,20 @@ void figure2()
   list<Constraint<SE3<>,6> >::iterator el1 = se3_list.begin();
   el1->fisher_information = inf6;
 
+
+
+
+
+
+
   SE3ConFun se3confun;
 
   GraphOptimizer<Sim3<>,7> opt7;
   GraphOptimizer<SE3<>,6> opt6;
 
   updated_trans6_list = trans6_list;
+
+  opt6.verbose = false;
 
   //Perform standard 6 DoF optimisation
   opt6.optimize(updated_trans6_list,
@@ -505,11 +518,11 @@ void figure2()
   }
 
   vector<Vector<3> > cor_point_vec;
-  vector<Vector<3> > cor7_point_vec_vorher;
   vector<Vector<3> > cor7_point_vec;
 
   SE3XYZ se3xyz(cam_pars);
-  RobotVision::BundleAdjuster<SE3<> ,6,3,3,IdObs<2>,2> ba;
+  RobotVision::BA_SE3_XYZ ba;
+
 
   // map points into updated frames
   cor7_point_vec = point_vec;
@@ -532,7 +545,7 @@ void figure2()
 
   // map points into updated frames
   cor_point_vec = point_vec;
-  
+
   for (uint i=0; i<obs_vec.size(); ++i)
   {
     int frame_id = obs_vec[i].frame_id;
@@ -540,7 +553,7 @@ void figure2()
     int id = obs_vec[i].frame_id-loop_id;
     if (id>=0)
     {
-      Vector<3> rel_point = transform(sim_vec[frame_id], point_vec[point_id]);
+      Vector<3> rel_point = transform(pose_vec[frame_id], point_vec[point_id]);
       Vector<3> cor_point
           = transform(updated_trans6_list[id].inverse(),rel_point);
       cor_point_vec[point_id] = cor_point;
@@ -548,38 +561,50 @@ void figure2()
 
   }
 
-  cor7_point_vec_vorher =cor7_point_vec;
 
 
-  ba.calcStructOnly(cor_pose_vec,
-                    cor_point_vec,
-                    se3xyz,
-                    obs_vec,
-                    0,
-                    BundleAdjusterParams(true,1,10));
+
+
+  BA_SE3_XYZ::_TrackMap track_map;
+  for (uint i=0; i<obs_vec.size();++i)
+  {
+    IdObs<2> & id_obs = obs_vec[i];
+
+    BA_SE3_XYZ::_TrackMap::iterator it
+        = track_map.find(id_obs.point_id);
+    if (it==track_map.end())
+    {
+      list<IdObs<2> > obs_list;
+      obs_list.push_back(id_obs);
+      track_map.insert(make_pair(id_obs.point_id,obs_list));
+    }
+    else
+    {
+      it->second.push_back(id_obs);
+    }
+  }
+
+
+
+  ba.calcFastStructureOnly(cor_pose_vec,
+              cor_point_vec,
+              se3xyz,
+              track_map,
+              BundleAdjusterParams(true,1,10));
 
   ba.verbose = true;
   StopWatch ba_m;
   ba_m.start();
-  cout << "Struture-only BA:" << endl;
-  ba.calcStructOnly(cor7_pose_vec,
-                    cor7_point_vec,
-                    se3xyz,
-                    obs_vec,
-                    0,
-                    BundleAdjusterParams(false,1,10));
+  cout << "Structure-Only BA:" << endl;
+  ba.calcFastStructureOnly(cor7_pose_vec,
+              cor7_point_vec,
+              se3xyz,
+              track_map,
+              BundleAdjusterParams(true,1,10));
   ba_m.stop();
   cout << "time in s: " << ba_m.getStoppedTime()  << endl << endl;;
 
-#if 0
-  ba.calcFull(cor_pose_vec,
-              cor_point_vec,
-              se3xyz,
-              obs_vec,
-              2,
-              0,
-              BundleAdjusterParams(true,1,10));
-#endif
+
 
   SE3<> cur_pose = pose_vec[pose_vec.size()-1];
 
@@ -631,6 +656,7 @@ void figure2()
         view3d.drawBall3D(cor_point_vec[i],0.01);
       }
     }
+
 
     if (show_sim3)
     {
@@ -785,7 +811,7 @@ void figure3()
       BundleAdjusterParams ba_pars_f(false,0,1,1);
       BundleAdjusterParams ba_pars_k(false,0,10);
 
-      BundleAdjuster<SE3<>,6,3,3,IdObs<2>,2> ba;
+      BA_SE3_XYZ ba;
       SE3UVQ se3uvq(cam_pars);
       SE3XYZ se3xyz(cam_pars);
       DrawItems::Line3DList line_list2;
@@ -903,7 +929,26 @@ void figure3()
         ++point_id;
       }
 
-      ba.calcFull(ba_poses,ba_points,se3xyz,ba_obs,1,0,ba_pars_k,false);
+      BA_SE3_XYZ::_TrackMap track_map;
+      for (uint i_obs=0; i_obs<ba_obs.size();++i_obs)
+      {
+        IdObs<2> & id_obs = ba_obs[i_obs];
+
+        BA_SE3_XYZ::_TrackMap::iterator it
+            = track_map.find(id_obs.point_id);
+        if (it==track_map.end())
+        {
+          BA_SE3_XYZ::_Track obs_list;
+          obs_list.push_back( id_obs);
+          track_map.insert(make_pair(id_obs.point_id,obs_list));
+        }
+        else
+        {
+          it->second.push_back(id_obs);
+        }
+      }
+      ba.calcFast(ba_poses,ba_points,se3xyz,track_map,1,ba_pars_k);
+      //ba.calcFull(ba_poses,ba_points,se3xyz,ba_obs,1,0,ba_pars_k,false);
 
       for (uint i=0; i<id_vec.size(); ++i)
       {
@@ -926,7 +971,7 @@ void figure3()
       vector<Vector<3> > cor7_point_vec;
 
       vector<SE3<> > trans6_list;
-      vector<SE3<> > cor7_pose_vec;\
+      vector<SE3<> > cor7_pose_vec;
 
       StopWatch wait_in_the_end;
       while (!end || wait_in_the_end.readCurrentTime() < 5)
@@ -1007,11 +1052,13 @@ void figure3()
             }
           }
 
-          vector<SE3<> > new_pose_vec;
-          new_pose_vec.push_back(origin);
-          ba.calcMotionOnly(new_pose_vec,point_vec,se3xyz,obs_vec,0,ba_pars_k);
-          kf= new_pose_vec[0];
-          cur_pose = new_pose_vec[0];
+          SE3<>  new_pose = origin;
+          std::list<IdObs<2> > obs_list = std::list<IdObs<2> >(obs_vec.begin(),
+                                                               obs_vec.end());
+
+          ba.calcFastMotionOnly(new_pose,point_vec,se3xyz,obs_list,ba_pars_k);
+          kf = new_pose;
+          cur_pose = new_pose;
           ba_frame = cur_pose*origin.inverse();
 
           double scale_sum=0;
@@ -1073,10 +1120,28 @@ void figure3()
                         ba_point_vec,
                         ba_obs_vec,
                         globalid_vec);
+            BA_SE3_XYZ::_TrackMap track_map;
+            for (uint i_obs=0; i_obs<ba_obs_vec.size();++i_obs)
+            {
+              IdObs<2> & id_obs = ba_obs_vec[i_obs];
 
-            ba.calcFull(ba_frame_vec,ba_point_vec,se3xyz,ba_obs_vec,
+              BA_SE3_XYZ::_TrackMap::iterator it
+                  = track_map.find(id_obs.point_id);
+              if (it==track_map.end())
+              {
+                list<IdObs<2> > obs_list;
+                obs_list.push_back(id_obs);
+                track_map.insert(make_pair(id_obs.point_id,obs_list));
+              }
+              else
+              {
+                it->second.push_back(id_obs);
+              }
+            }
+            ba.calcFast(ba_frame_vec,ba_point_vec,se3xyz,track_map,
                         2,
-                        0,ba_pars_k,false);
+                        ba_pars_k,false);
+
 
             for (uint i=0; i<ba_frame_vec.size(); ++i)
             {
@@ -1164,8 +1229,6 @@ void figure3()
             vector<SE3<> > se3_vec;
             vector<Sim3<> > sim3_vec;
 
-            SE3<> & pose = keyframe_vec[0];
-
             for (uint i=0; i<keyframe_vec.size(); ++i)
             {
               SE3<> & pose = keyframe_vec[i];
@@ -1173,7 +1236,7 @@ void figure3()
               se3_vec.push_back(pose);
               sim3_vec.push_back(sim);
             }
-            Sim3<>  sim(pose.get_rotation(),pose.get_translation(),1.);
+
             trans7_list.push_back(sim3_vec[0]);
             trans6_list.push_back(se3_vec[0]);
 
@@ -1296,7 +1359,7 @@ void figure3()
 
             SE3CompareModScale t;
             double s=1;
-            double v1 = t.optimize(true_poses,cor7_pose_vec,s,10);
+            double  v1 = t.optimize(true_poses,cor7_pose_vec,s,10);
 
             for (uint i_f=0; i_f<cor7_pose_vec.size(); ++i_f)
             {
@@ -1326,8 +1389,8 @@ void figure3()
               median_scale = 1./median_scale;
 
             double scale_drift = median_scale-1;
-            double rmse_sim3 = sqrt(v1/num_frames);
-            double rmse_se3 = sqrt(v2/num_frames);
+            double rmse_sim3 = v1/num_frames;
+            double rmse_se3 = v2/num_frames;
 
             sum_rmse_se3 += rmse_se3;
             sum_rmse_sim3 += rmse_sim3;
@@ -1717,7 +1780,7 @@ void figure4()
 
   double noise= 0.75;
 
-  double v1 = -1;
+  double rmse_sim3 = -1;
   getObsWithID(cam_pars,
                true_pose_vec[0],
                true_point_vec,
@@ -1758,7 +1821,7 @@ void figure4()
 
   BundleAdjusterParams ba_pars_f(false,0,1);
   BundleAdjusterParams ba_pars_k(false,0,10);
-  BundleAdjuster<SE3<>,6,3,3,IdObs<2>,2> ba;
+  BA_SE3_XYZ ba;
   SE3UVQ se3uvq(cam_pars);
   SE3XYZ se3xyz(cam_pars);
 
@@ -1860,7 +1923,25 @@ void figure4()
       ++global_num;
     }
 
-    ba.calcFull(ba_poses,ba_points,se3xyz,ba_obs,1,0,ba_pars_k);
+    BA_SE3_XYZ::_TrackMap track_map;
+    for (uint i_obs=0; i_obs<ba_obs.size();++i_obs)
+    {
+      IdObs<2> & id_obs = ba_obs[i_obs];
+
+      BA_SE3_XYZ::_TrackMap::iterator it
+          = track_map.find(id_obs.point_id);
+      if (it==track_map.end())
+      {
+        list<IdObs<2> > obs_list;
+        obs_list.push_back(id_obs);
+        track_map.insert(make_pair(id_obs.point_id,obs_list));
+      }
+      else
+      {
+        it->second.push_back(id_obs);
+      }
+    }
+    ba.calcFast(ba_poses,ba_points,se3xyz,track_map,1,ba_pars_k);
 
     for (uint i=0; i<id_vec.size(); ++i)
     {
@@ -2011,8 +2092,34 @@ void figure4()
       }
 
       //optimise over cur_pose
-      ba.calcMotionOnly(ba_pose_vec,ba_point_vec,se3xyz,ba_obs_vec,0,ba_pars_k);
-      cur_pose = ba_pose_vec[0];
+      //      BA_SE3_XYZ::_TrackMap track_map;
+      //       for (uint i_obs=0; i_obs<ba_obs_vec.size();++i_obs)
+      //       {
+      //         IdObs<2> & id_obs = ba_obs_vec[i_obs];
+
+      //         BA_SE3_XYZ::_TrackMap::iterator it
+      //             = track_map.find(id_obs.point_id);
+      //         if (it==track_map.end())
+      //         {
+      //           list<IdObs<2> > obs_list;
+      //           obs_list.push_back(id_obs);
+      //           track_map.insert(make_pair(id_obs.point_id,obs_list));
+      //         }
+      //         else
+      //         {
+      //           it->second.push_back(id_obs);
+      //         }
+      //       }
+      //ba.calcFastMotionOnly(ba_pose_vec,ba_point_vec,se3xyz,track_map,ba_pars_k);
+
+      std::list<IdObs<2> > obs_list = std::list<IdObs<2> >(ba_obs_vec.begin(),
+                                                           ba_obs_vec.end());
+      ba.calcFastMotionOnly(cur_pose,ba_point_vec,se3xyz,obs_list,ba_pars_k);
+
+
+
+      //ba.calcMotionOnly(ba_pose_vec,ba_point_vec,se3xyz,ba_obs_vec,0,ba_pars_k);
+      // cur_pose = ba_pose_vec[0];
 
       ba_frame = cur_pose*old_pose.inverse();
 
@@ -2121,13 +2228,39 @@ void figure4()
                     ba_obs_vec,
                     globalid_vec);
 
-        ba.calcFull(ba_frame_vec,
+        BA_SE3_XYZ::_TrackMap track_map;
+        for (uint i_obs=0; i_obs<ba_obs_vec.size();++i_obs)
+        {
+          IdObs<2> & id_obs = ba_obs_vec[i_obs];
+
+          BA_SE3_XYZ::_TrackMap::iterator it
+              = track_map.find(id_obs.point_id);
+          if (it==track_map.end())
+          {
+            list<IdObs<2> > obs_list;
+            obs_list.push_back(id_obs);
+            track_map.insert(make_pair(id_obs.point_id,obs_list));
+          }
+          else
+          {
+            it->second.push_back(id_obs);
+          }
+        }
+        ba.calcFast(ba_frame_vec,
                     ba_point_vec,
                     se3xyz,
-                    ba_obs_vec,
+                    track_map,
                     num_fix_frames,
-                    0,
+
                     ba_pars_k);
+
+        //        ba.calcFull(ba_frame_vec,
+        //                    ba_point_vec,
+        //                    se3xyz,
+        //                    ba_obs_vec,
+        //                    num_fix_frames,
+        //                    0,
+        //                    ba_pars_k);
 
         for (uint i=0; i<ba_frame_vec.size(); ++i)
         {
@@ -2251,6 +2384,8 @@ void figure4()
         Matrix<6,6> inf6 = Identity(6);
         Matrix<7,7> inf7 = Identity(7);
 
+        cout << "Number of loop constraints: " << loop_list.size() << endl;
+
         for (uint i=0; i<loop_list.size(); ++i)
         {
           pair<int,int> & int_pair = loop_list.at(i);
@@ -2283,12 +2418,15 @@ void figure4()
         Sim3ConFun sim3_confun;
 
         GraphOptimizer<Sim3<>,7> opt7;
+        StopWatch sw7;
+        sw7.start();
         opt7.optimize(trans7_list,
                       sim3_list,
                       sim3_confun,
                       1,
                       2,
                       0.0000000000001);
+        sw7.stop();
 
         for (uint i_f=0; i_f<trans7_list.size(); ++i_f)
         {
@@ -2300,7 +2438,7 @@ void figure4()
 
         SE3CompareModScale t;
         double s=1;
-        v1 = t.optimize(true_pose_vec,cor7_pose_vec,s,10);
+        double v1 = t.optimize(true_pose_vec,cor7_pose_vec,s,10);
 
         for (uint i_f=0; i_f<cor7_pose_vec.size(); ++i_f)
         {
@@ -2308,9 +2446,13 @@ void figure4()
               = s*cor7_pose_vec[i_f].get_translation();
         }
         cout << "Sim3 rmse: " << sqrt(v1/true_pose_vec.size()) << endl;
+        cout << "time in s: " << sw7.getStoppedTime() << endl;
 
         GraphOptimizer<SE3<>,6> opt6;
+        StopWatch sw6;
+        sw6.start();
         opt6.optimize(trans6_list,se3_list,se3_confun,1,2,0.0000000000001);
+        sw6.stop();
 
         s=1;
         double v2 = t.optimize(true_pose_vec,trans6_list,s,10);
@@ -2321,7 +2463,8 @@ void figure4()
               = s*trans6_list[i_f].get_translation();
         }
         cout << "Se3 rmse: " << sqrt(v2/true_pose_vec.size()) << endl;
-        v1 = sqrt(v1/true_pose_vec.size());
+        cout << "time in s: " << sw6.getStoppedTime() << endl;
+        rmse_sim3 = sqrt(v1/true_pose_vec.size());
       }
 
       ++truepose_id;
@@ -2418,7 +2561,7 @@ void figure4()
         if(end)
         {
           char cstr[70];
-          sprintf(cstr, "Root mean square error: %4.3f",v1);
+          sprintf(cstr, "Root mean square error: %4.3f",rmse_sim3);
           str = cstr;
           cv::putText(rgb_img.cv_mat,
                       str,
@@ -2528,10 +2671,10 @@ int main(int argc, char *argv[])
   cout << endl;
   cout << "This program creates the figures of the paper:\n\n";
   cout << "> H. Strasdat, J.M.M. Montiel, A.J. Davison:\n"
-       << "  'Scale Drift-Aware Large Scale Monocular SLAM',\n"
-       << "  Proc. of Robotics: Science and Systems (RSS),\n"
-       << "  Zaragoza, Spain, 2010.\n"
-       << "  http://www.roboticsproceedings.org/rss06/p10.htm <\n\n\n";
+      << "  'Scale Drift-Aware Large Scale Monocular SLAM',\n"
+      << "  Proc. of Robotics: Science and Systems (RSS),\n"
+      << "  Zaragoza, Spain, 2010.\n"
+      << "  http://www.roboticsproceedings.org/rss06/p10.htm <\n\n\n";
   if (argc>1 && atoi(argv[1])==2)
     figure2();
   if (argc>1 && atoi(argv[1])==3)

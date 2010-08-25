@@ -359,6 +359,13 @@ namespace TooN
 
   public:
 
+    QuadTree() :
+        bbox(RobotVision::Rectangle(-1,-1,-1,-1)),
+        root(-1, bbox),
+        delta(-1)
+    {
+    }
+
     QuadTree(const RobotVision::Rectangle & bbox,
              double delta) : bbox(bbox)  , root(delta, bbox)
     {

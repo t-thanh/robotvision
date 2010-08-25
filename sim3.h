@@ -28,6 +28,7 @@
 #include "maths_utils.h"
 
 #include <TooN/se3.h>
+#include <TooN/LU.h>
 
 #define RV_PROPER_SIM3 1
 
@@ -60,7 +61,7 @@ namespace RobotVision
         Sim3(const TooN::SO3<> & R,
              const TooN::Vector<Size, Precision, Layout>& t,
              const Precision s)
-          : my_rotation(R), my_translation(t), my_scale(s) {}
+               : my_rotation(R), my_translation(t), my_scale(s) {}
 
     template <int Size, typename Layout>
         Sim3(const TooN::Matrix<3> & R,
@@ -94,12 +95,12 @@ namespace RobotVision
       return my_translation;
     }
 
-    inline double& get_scale()
+    inline Precision& get_scale()
     {
       return my_scale;
     }
 
-    inline const double& get_scale() const
+    inline const Precision& get_scale() const
     {
       return my_scale;
     }
@@ -111,32 +112,59 @@ namespace RobotVision
 #ifdef RV_PROPER_SIM3
       TooN::Vector<3,Precision> upsilon = vect.slice(0,3);
       TooN::Vector<3,Precision> omega = vect.slice(3,3);
-      double sigma = vect[6];
+      Precision sigma = vect[6];
+      Precision eps = 0.00001;
 
-      double theta = norm(omega);
+      Precision theta = norm(omega);
       TooN::Matrix<3,3,Precision> Omega = RobotVision::skew(omega);
+      TooN::Matrix<3,3,Precision> Omega2 = Omega*Omega;
       TooN::Matrix<3,3,Precision> R;
-      TooN::Matrix<3,3,Precision> V;
-      double s;
-      if (theta<0.00001)
+
+      TooN::Matrix<3,3,Precision> I = TooN::Identity;;
+      Precision s = std::exp(sigma);
+
+      Precision A,B,C;
+      if (fabs(sigma)<eps)
       {
-        R = (TooN::Identity(3) + Omega + Omega*Omega);
-        s = std::exp(sigma);
-        V = s*R;
+        C = 1;
+        if (theta<eps)
+        {
+          A = 1./2.;
+          B = 1./6.;
+          R = (I + Omega + Omega*Omega);
+        }
+        else
+        {
+          A = (1-cos(theta))/Po2(theta);
+          B = (theta-sin(theta))/Po3(theta);
+          R = I + sin(theta)/theta *Omega + (1-cos(theta))/(Po2(theta))*Omega2;
+        }
       }
       else
       {
-        TooN::Matrix<3,3,Precision> Omega2 = Omega*Omega;
+        C=(s-1)/sigma;
+        if (theta<eps)
+        {
+          A = ((sigma-1)*s+1)/Po2(sigma);
+          B= ((0.5*Po2(sigma)-sigma+1)*s)/Po3(sigma);
+          R = (I + Omega + Omega2);
+        }
+        else
+        {
+          R = I + sin(theta)/theta *Omega + (1-cos(theta))/(Po2(theta))*Omega2;
 
-        R = (TooN::Identity(3)
-             + sin(theta)/theta *Omega
-             + (1-cos(theta))/(RobotVision::Po2(theta))*Omega2);
-        s = std::exp(sigma);
-        V = s*(TooN::Identity(3)
-               + (1-cos(theta))/(RobotVision::Po2(theta))*Omega
-               + (theta-sin(theta))/(RobotVision::Po3(theta))*Omega2);
+
+
+          Precision a=s*sin(theta);
+          Precision b=s*cos(theta);
+          Precision c=Po2(theta)+Po2(sigma);
+          A = (a*sigma+ (1-b)*theta)/(theta*c);
+          B = (C-((b-1)*sigma+a*theta)/(c))*1./(Po2(theta));
+        }
       }
-      TooN::Vector <3,Precision> t = V*upsilon;
+
+      TooN::Matrix<3,3,Precision> W = A*Omega + B*Omega2 + C*I;
+      TooN::Vector <3,Precision> t = W*upsilon;
       return Sim3(R, t, s);
 #else
       TooN::SE3<Precision> se3 (vect.slice(0,6));
@@ -193,40 +221,73 @@ namespace RobotVision
     return out_str;
   }
 
-   template <typename Precision>
+  template <typename Precision>
       inline TooN::Vector<7, Precision>
       Sim3<Precision>::ln(const Sim3<Precision>& sim3)
   {
 #ifdef RV_PROPER_SIM3
     TooN::Vector<7, Precision> res;
-    double sigma = log(sim3.my_scale);
-    TooN::Matrix<3,3,Precision> R = sim3.my_rotation.get_matrix();
-    TooN::Vector<3,Precision> t = sim3.my_translation;
+    Precision s = sim3.my_scale;
+    Precision sigma = log(s);
 
-    double d =  0.5*(R(0,0)+R(1,1)+R(2,2)-1);
+    TooN::Vector<3,Precision> t = sim3.my_translation;
+    TooN::Matrix<3,3,Precision> R = sim3.my_rotation.get_matrix();
+    Precision d =  0.5*(R(0,0)+R(1,1)+R(2,2)-1);
 
     TooN::Vector<3,Precision> omega;
     TooN::Vector<3,Precision> upsilon;
     TooN::Matrix<3,3,Precision> Omega;
-    TooN::Matrix<3,3,Precision> V_inv;
 
-    if (d>0.99999)
+    Precision eps = 0.00001;
+    TooN::Matrix<3,3,Precision> I = TooN::Identity;;
+
+    Precision A,B,C;
+    if (fabs(sigma)<eps)
     {
-      omega=0.5*RobotVision::deltaR(R);
-      Omega = RobotVision::skew(omega);
-      V_inv = TooN::Identity(3)- 0.5*Omega + (1./12.)*(Omega*Omega);
+      C = 1;
+      if (d>1-eps)
+      {
+        omega=0.5*RobotVision::deltaR(R);
+        Omega = RobotVision::skew(omega);
+        A = 1./2.;
+        B = 1./6.;
+
+      }
+      else
+      {
+        Precision theta = acos(d);
+        omega = theta/(2*sqrt(1-d*d))*RobotVision::deltaR(R);
+        Omega = RobotVision::skew(omega);
+        A = (1-cos(theta))/Po2(theta);
+        B = (theta-sin(theta))/Po3(theta);
+      }
     }
     else
     {
-      double theta = acos(d);
-      omega = theta/(2*sqrt(1-d*d))*RobotVision::deltaR(R);
-      Omega = RobotVision::skew(omega);
-      V_inv = 1/sim3.my_scale
-              *(TooN::Identity(3)- 0.5*Omega
-                + (1-theta/(2*tan(theta/2)))/(theta*theta)*(Omega*Omega));
+      C=(s-1)/sigma;
+      if (d>1-eps)
+      {
+        omega=0.5*RobotVision::deltaR(R);
+        Omega = RobotVision::skew(omega);
+        A = ((sigma-1)*s+1)/Po2(sigma);
+        B = ((0.5*Po2(sigma)-sigma+1)*s)/Po3(sigma);
+      }
+      else
+      {
+        Precision theta = acos(d);
+        omega = theta/(2*sqrt(1-d*d))*RobotVision::deltaR(R);
+        Omega = RobotVision::skew(omega);
+        Precision a=s*sin(theta);
+        Precision b=s*cos(theta);
+        Precision c=Po2(theta)+Po2(sigma);
+        A = (a*sigma+ (1-b)*theta)/(theta*c);
+        B = (C-((b-1)*sigma+a*theta)/(c))*1./(Po2(theta));
+      }
     }
 
-    upsilon = V_inv*t;
+    TooN::Matrix<3,3,Precision> W = A*Omega + B*Omega*Omega + C*I;
+    TooN::LU<3,Precision> LU_W(W);
+    upsilon = LU_W.backsub(t);
     res.slice(0,3) = upsilon;
     res.slice(3,3) = omega;
     res[6] = sigma;

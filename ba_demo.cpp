@@ -21,8 +21,12 @@ using namespace CVD;
 using namespace TooN;
 using namespace RobotVision;
 
+
+
 int main(int argc, char *argv[])
 {
+
+
   const int WIDTH = 640;
   const int HEIGHT = 480;
 
@@ -43,9 +47,9 @@ int main(int argc, char *argv[])
     cout << endl;
     cout << "X := noise in the image e.g., X=0.5" << endl;
     cout << "Y :=  probability of a spurious match, e.g. Y=0.05 or Y=0.0"
-          << endl;
-    cout << "Z := use robust kernel?. Z=0 (false) or Z=1 (true)"
-          << endl;
+        << endl;
+    cout << "Z := use robust kernel? Z=0 (off) or Z=1 (on)"
+        << endl;
     cout << endl;
     exit(0);
   }
@@ -60,11 +64,13 @@ int main(int argc, char *argv[])
   ImageRef win_size(WIDTH,HEIGHT);
   GuiWindow glwin(win_size);
 
-  LinearCamera cam(makeVector(484.69093,-485.57926),
+  LinearCamera cam(makeVector(484.69093,485.57926),
                    makeVector(312.22988,247.83456),
                    ImageRef(640,480));
 
-  LinearCamera guiview_cam(makeVector(1000,-1000),
+
+
+  LinearCamera guiview_cam(makeVector(1000,1000),
                            makeVector(WIDTH/2,HEIGHT/2),
                            ImageRef(WIDTH,HEIGHT));
 
@@ -79,113 +85,146 @@ int main(int argc, char *argv[])
   view3d.set_handler(new DoomViewHandler(&view3d));
 
   vector<Vector<3> > true_point_list;
+  vector<Vector<3> > true_vis_point_list;
   vector<SE3<double> > true_frame_list;
 
   vector<Vector<3> > noisy_point_list;
 
-  vector<Vector<3> > visible_point_list;
+
   vector<SE3<double> > noisy_frame_list;
 
-  vector<Vector<3> > cor_point_list;
-  vector<SE3<double> > cor_frame_list;
 
   // create list of true points
-  for (int i=0; i<500; ++i)
+  for (int i=0; i<200; ++i)
   {
-    true_point_list.push_back(makeVector(rand_u()*0.9,
-                                         (rand_u()-0.5)*0.9,rand_u()));
+    true_point_list.push_back(makeVector(rand_u()*5,
+                                         (rand_u()-0.5)*0.9,rand_u()+0.03));
   }
 
   // create list of noisy points
   for (uint i=0; i<true_point_list.size(); ++i)
   {
     noisy_point_list.push_back(true_point_list[i]
-                               + makeVector(rand_g(),rand_g(),rand_g()) * 0.01);
+    + makeVector(0,0,rand_g()) * 0.03);
   }
 
-  vector<IdObs<2> > obs_vec;
+
+
+  int num_frames = 50;
+  double factor = 0.1;
+  double initial_lambda = 0.05;
 
   //create list of true and noisy poses/frames
-  for (int i=0; i<10; ++i)
+  for (int i=0; i<num_frames; ++i)
   {
     SO3<double> rot;
-    true_frame_list.push_back(SE3<double>(rot,makeVector(-i*0.1,0,1)));
-    if (i<1)
+    true_frame_list.push_back(SE3<double>(rot,makeVector(-i*factor,0,0)));
+    if (i<2)
     {
-      noisy_frame_list.push_back(SE3<double>(rot,makeVector(-i*0.1,0,1)));
+      noisy_frame_list.push_back(SE3<double>(rot,makeVector(-i*factor,0,0)));
     }
     else
     {
       noisy_frame_list.push_back(
-          SE3<double>(rot,makeVector(-i*0.1,0,1)
-                      + makeVector(rand_g(),rand_g(),rand_g()) * 0.1 ));
+          SE3<double>(rot,makeVector(-i*factor,0,0)
+                      + makeVector(rand_g(),rand_g(),rand_g()) * 0.01 ));
     }
   }
 
-  //create list of observations and visible points
-  int j_p = 0;
-  for (uint j=0; j<true_point_list.size(); ++j)
-  {
-    bool matched = false;
-    vector<IdObs<2> > tmp_vec;
 
-    Vector<3> & p3d = true_point_list[j];
-    for (uint i=0; i<true_frame_list.size(); ++i)
+  srand(5);
+
+
+    vector<IdObs<2> > obs_vec;
+    vector<Vector<3> > visible_point_list;
+    vector<Vector<3> > cor_point_list;
+    vector<Vector<4> > cor_hompoint_list;
+    vector<SE3<double> > cor_frame_list;
+
+   BundleAdjuster<SE3<> ,6,3,3,IdObs<2>,2>::_TrackMap track_list;
+
+    //create list of observations and visible points
+    int j_p = 0;
+    for (uint j=0; j<true_point_list.size(); ++j)
     {
-      Vector<2> obs;
+      bool matched = false;
+      vector<IdObs<2> > tmp_vec;
 
-      obs = se3xyz.map(true_frame_list[i],p3d)
-            + image_noise*makeVector(rand_g(),rand_g());
+      BundleAdjuster<SE3<> ,6,3,3,IdObs<2>,2>::_Track track;
 
-      if(obs[0]>=0 && obs[1]>=0 && obs[0]<=639 && obs[1] <= 479)
+
+
+      Vector<3> & p3d = true_point_list[j];
+      for (uint i=0; i<true_frame_list.size(); ++i)
       {
-        if (rand_u()<spurious_matches_prob)
+        Vector<2> obs;
+
+        obs = se3xyz.map(true_frame_list[i],p3d)
+              + image_noise*makeVector(rand_g(),rand_g());
+
+        if(obs[0]>=0 && obs[1]>=0 && obs[0]<=639 && obs[1] <= 479)
         {
-          obs = makeVector(rand_u()*640,rand_u()*480);
+          if (rand_u()<spurious_matches_prob)
+          {
+            obs = makeVector(rand_u()*640,rand_u()*480);
+          }
+          matched = true;
+          tmp_vec.push_back(IdObs<2>(j_p,i,obs));
+
+
+          track.push_back(IdObs<2>(j_p,i,obs));
+
         }
-        matched = true;
-        tmp_vec.push_back(IdObs<2>(j_p,i,obs));
+      }
+      if (matched){
+
+        obs_vec.insert(obs_vec.end(),tmp_vec.begin(),tmp_vec.end());
+        visible_point_list.push_back(noisy_point_list[j]);
+        cor_hompoint_list.push_back(unproject(noisy_point_list[j]));
+        true_vis_point_list.push_back(noisy_point_list[j]);
+        track_list.insert(make_pair(j_p,track));
+          ++j_p;
+
       }
     }
-    if (matched){
-      ++j_p;
-      obs_vec.insert(obs_vec.end(),tmp_vec.begin(),tmp_vec.end());
-      visible_point_list.push_back(noisy_point_list[j]);
 
-    }
-  }
+    BundleAdjuster<SE3<> ,6,3,3,IdObs<2>,2> ba;
 
-  BundleAdjuster<SE3<> ,6,3,3,IdObs<2>,2> ba;
+    ba.verbose = true;
 
-  StopWatch sw;
-  cor_frame_list = noisy_frame_list;
-  cor_point_list = visible_point_list;
+    StopWatch sw;
+    cor_frame_list = noisy_frame_list;
+    cor_point_list = visible_point_list;
 
-  uint num_iters = 50;
-  BundleAdjusterParams opt_params(robust_kernel,1,num_iters);
+
+    uint num_iters = 5;
+   BundleAdjusterParams opt_params(robust_kernel,1,num_iters,initial_lambda);
+
+
+
 
   cout << "Do " << num_iters << " iterations of bundle adjustment!" << endl;
 
-  sw.start();
-  ba.calcFull(cor_frame_list,
-              cor_point_list,
-              se3xyz,
-              obs_vec,
-              1,
-              0,
-              opt_params,
-              false);
-  sw.stop();
-  cout << "time in s: " << sw.getStoppedTime() << endl <<endl;
+   ba.verbose = true;
+    sw.start();
+       cout << ba.calcFast(cor_frame_list,
+                   cor_point_list,
+                   se3xyz,
+                   track_list,
+                   1,
+                   opt_params,3) << endl;
+       sw.stop();
+       cout << "time in s: " << sw.getStoppedTime() << endl <<endl;
 
-  SE3CompareModScale t;
-  double s=1;
-  double rmse = t.optimize(true_frame_list,cor_frame_list,s,10);
-  cout << "RMS error: " << rmse << endl<<endl;
-  cout << "True data is shown in blue." << endl;
-  cout << "Noisy data before optimisation is shown in grey." << endl;
-  cout << "Optimised data is shown in red." << endl;
-  cout << endl <<endl;
+
+  
+
+
+
+  
+
+
+
 
   while (true)
   {
@@ -195,33 +234,43 @@ int main(int argc, char *argv[])
     view3d.activate3D();
 
     glColor3f(0.8,0.8,0.8);
-    for (uint i=0; i<true_point_list.size(); ++i)
+    for (uint i=0; i<noisy_point_list.size(); ++i)
     {
       view3d.drawBall3D(noisy_point_list[i],0.005);
     }
-        for (uint i=0; i<noisy_frame_list.size(); ++i)
+    for (uint i=0; i<noisy_frame_list.size(); ++i)
     {
       view3d.drawPose3D(noisy_frame_list[i]);
     }
 
     glColor3f(0,0,0.75);
-    for (uint i=0; i<true_frame_list.size(); ++i){
+    for (uint i=0; i<true_frame_list.size(); ++i)
+    {
       view3d.drawPose3D(true_frame_list[i]);
     }
-    for (uint i=0; i<true_point_list.size(); ++i)
+    for (uint i=0; i<true_vis_point_list.size(); ++i)
     {
-      view3d.drawBall3D(true_point_list[i],0.005);
+      view3d.drawBall3D(true_vis_point_list[i],0.005);
     }
 
+
     glColor3f(0.75,0,0);
-    for (uint i=0; i<cor_frame_list.size(); ++i){
-      view3d.drawPose3D(cor_frame_list[i]);
-    }
-    for (uint i=0; i<cor_point_list.size(); ++i)
-    {
-      view3d.drawLine3D(true_point_list[i],cor_point_list[i]);
-      view3d.drawBall3D(cor_point_list[i],0.005);
-    }
+    view3d.drawBall3D(true_frame_list[num_frames-1].inverse().get_translation(),0.001);
+
+
+
+
+
+        glColor3f(0.75,0,0);
+        for (uint i=0; i<cor_frame_list.size(); ++i)
+        {
+          view3d.drawPose3D(cor_frame_list[i]);
+        }
+        for (uint i=0; i<cor_hompoint_list.size(); ++i)
+        {
+          view3d.drawLine3D(true_vis_point_list[i],project(cor_hompoint_list[i]));
+          view3d.drawBall3D(project(cor_hompoint_list[i]),0.005);
+        }
 
     glColor3f(0.3,0.3,0.3);
     view3d.drawLine3D(makeVector(0,0,0),makeVector(10000,0,0));

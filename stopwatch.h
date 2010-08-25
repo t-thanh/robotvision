@@ -24,7 +24,7 @@
 #ifndef RV_STOP_WATCH_H
 #define RV_STOP_WATCH_H
 
-#include <assert.h>
+#include <cassert>
 
 #include <cvd/timer.h>
 

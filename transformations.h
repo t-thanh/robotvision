@@ -26,6 +26,9 @@
 
 #include "TooN/se2.h"
 
+#include <list>
+
+
 #include "Camera/abstract_camera.h"
 #include "Camera/linear_camera.h"
 #include "maths_utils.h"
@@ -48,6 +51,16 @@ namespace RobotVision
       transform(const RobotVision::Sim3<A>& T, const TooN::Vector<3,A>& x)
   {
     return T.get_scale()*(T.get_rotation()*x) + T.get_translation();
+  }
+
+
+  template <class A> inline TooN::Vector<4>
+      transform(const TooN::SE3<A>& T, const TooN::Vector<4,A>& x)
+  {
+    TooN::Matrix<4,4>  M= TooN::Identity;
+    M.slice(0,0,3,3) = T.get_rotation().get_matrix();
+    M.T()[3].slice<0,3>() = T.get_translation();
+    return  M*x;
   }
 
 
@@ -76,6 +89,36 @@ namespace RobotVision
     virtual TooN::Vector<ObsDim>
         map(const Frame & T,
             const TooN::Vector<PointParNum> & x) const = 0;
+
+    virtual TooN::Vector<ObsDim>
+        map_n_bothJac(const Frame & T,
+                      const TooN::Vector<PointParNum> & x,
+                      TooN::Matrix<ObsDim,FrameDoF> & frame_jac,
+                      TooN::Matrix<ObsDim,PointDoF> & point_jac) const
+    {
+      frame_jac = frameJac(T,x);
+      point_jac = pointJac(T,x);
+      return map(T,x);
+    }
+
+    virtual TooN::Vector<ObsDim>
+        map_n_frameJac(const Frame & T,
+                       const TooN::Vector<PointParNum> & x,
+                       TooN::Matrix<ObsDim,FrameDoF> & frame_jac) const
+    {
+      frame_jac = frameJac(T,x);
+      return map(T,x);
+    }
+
+    virtual TooN::Vector<ObsDim>
+        map_n_pointJac(const Frame & T,
+                       const TooN::Vector<PointParNum> & x,
+                       TooN::Matrix<ObsDim,PointDoF> & point_jac) const
+    {
+      point_jac = pointJac(T,x);
+      return map(T,x);
+    }
+
 
     /** Jacobian wrt. frame: use numerical Jacobian as default */
     virtual TooN::Matrix<ObsDim,FrameDoF>
@@ -125,71 +168,39 @@ namespace RobotVision
         add(const TooN::Vector<PointParNum> & x,
             const TooN::Vector<PointDoF> & delta) const = 0;
 
-    virtual int first_rot_id() const = 0;
-    virtual int num_rot_pars() const = 0;
-    virtual int first_trans_id() const = 0;
-    virtual int num_trans_pars() const = 0;
   };
+
 
 
   /** abstract prediction class dependig on
    * 3D rigid body transformations SE3 */
   template <int PointParNum, int PointDoF, int ObsDim>
       class SE3_AbstractPoint
-        : public AbstractPrediction<TooN::SE3<>,6,PointParNum,PointDoF,ObsDim>
+        : public AbstractPrediction
+        <TooN::SE3<>,6,PointParNum,PointDoF,ObsDim>
   {
+  public:
     TooN::SE3<> add(const TooN::SE3<> &T, const TooN::Vector<6> & delta) const
     {
       return TooN::SE3<>(delta)*T;
     }
 
-    inline int first_rot_id() const
-    {
-      return 3;
-    }
-    inline int num_rot_pars() const
-    {
-      return 3;
-    }
-    inline int first_trans_id() const
-    {
-      return 0;
-    }
-    inline int num_trans_pars() const
-    {
-      return 3;
-    }
-
   };
+
 
 
   /** abstract prediction class dependig on
    * 2D rigid body transformations SE2 */
   template <int PointParNum, int PointDoF, int ObsDim>
       class SE2_AbstractPoint
-        : public AbstractPrediction<TooN::SE2<>,3,PointParNum,PointDoF,ObsDim>
+        : public AbstractPrediction
+        <TooN::SE2<>,3,PointParNum,PointDoF,ObsDim>
   {
     TooN::SE2<> add(const TooN::SE2<> &T, const TooN::Vector<3> & delta) const
     {
       return TooN::SE2<>(delta)*T;
     }
 
-    inline int first_rot_id() const
-    {
-      return 2;
-    }
-    inline int num_rot_pars() const
-    {
-      return 1;
-    }
-    inline int first_trans_id() const
-    {
-      return 0;
-    }
-    inline int num_trans_pars() const
-    {
-      return 2;
-    }
 
   };
 
@@ -217,28 +228,77 @@ namespace RobotVision
     }
   };
 
-  /** 3D Euclidean point class */
-  class SE3XYZ: public SE3_AbstractPoint<3, 3, 2>{
-  public:
 
-    SE3XYZ()
+  /** 3D Euclidean point class */
+  template <typename Intrinsics>
+      class AbstractSE3XYZ: public SE3_AbstractPoint<3, 3, 2>{
+      public:
+
+    AbstractSE3XYZ()
     {
     }
 
-    SE3XYZ(const RobotVision::LinearCamera & cam_pars)
+    AbstractSE3XYZ(const Intrinsics & cam)
     {
-      this->cam_pars = cam_pars;
+      this->cam = cam;
     }
 
     inline TooN::Vector<2> map(const TooN::SE3<> & T,
                                const TooN::Vector<3>& x) const
     {
-      return cam_pars.map(project(transform(T,x)));
+      return cam.map(project(transform(T,x)));
+    }
+
+    inline TooN::Vector<2>
+        map_n_bothJac(const TooN::SE3<> & T,
+                      const TooN::Vector<3>& x,
+                      TooN::Matrix<2,6> & frame_jac,
+                      TooN::Matrix<2,3> & point_jac) const
+    {
+      TooN::Vector<3> xyz_trans = transform(T,x);
+      frame_jac = frameJacFromTransXYZ(xyz_trans);
+      point_jac = pointJacFromTransXYZ(T,xyz_trans);
+      return cam.map(project(xyz_trans));
+    }
+
+    inline TooN::Vector<2>
+        map_n_pointJac(const TooN::SE3<> & T,
+                       const TooN::Vector<3>& x,
+                       TooN::Matrix<2,3> & point_jac) const
+    {
+      TooN::Vector<3> xyz_trans = transform(T,x);
+      point_jac = pointJacFromTransXYZ(T,xyz_trans);
+      return cam.map(project(xyz_trans));
+    }
+
+    inline TooN::Vector<2>
+        map_n_frameJac(const TooN::SE3<> & T,
+                       const TooN::Vector<3>& x,
+                       TooN::Matrix<2,6> & frame_jac) const
+    {
+      TooN::Vector<3> xyz_trans = transform(T,x);
+      frame_jac = frameJacFromTransXYZ(xyz_trans);
+      return cam.map(project(xyz_trans));
     }
 
 
     TooN::Matrix<2,6> frameJac(const TooN::SE3<> & T,
                                const TooN::Vector<3> & xyz) const
+    {
+
+      return frameJacFromTransXYZ(transform(T,xyz));
+    }
+
+    TooN::Matrix<2,3> pointJac(const TooN::SE3<> & T,
+                               const TooN::Vector<3> & xyz) const
+    {
+
+      return pointJacFromTransXYZ(T,transform(T,xyz));
+    }
+
+
+    TooN::Matrix<2,6> frameJacFromTransXYZ(const TooN::Vector<3> & xyz_trans)
+        const
     {
       TooN::Matrix<2,6> J_frame;
 
@@ -246,43 +306,71 @@ namespace RobotVision
         * Jacobians as described in Ethan Eade's Phd thesis:
         * http://mi.eng.cam.ac.uk/~ee231/thesis_revised.pdf , Appendix A
         */
-      TooN::Vector<3> xyz_trans = T.get_rotation()*xyz + T.get_translation();
 
       double x = xyz_trans[0];
       double y = xyz_trans[1];
       double z = xyz_trans[2];
-      double z_2 = Po2(z);
+      double one_b_z = 1/z;
+
+      double one_b_z2 = Po2(one_b_z);
+      double xy = x*y;
+
 
       J_frame[0]
-          = TooN::makeVector(1./z, 0, -x/z_2, -x*y/z_2, 1+(Po2(x)/z_2), -y/z);
+          = TooN::makeVector(one_b_z,
+                             0,
+                             -x*one_b_z2 ,
+                             -xy*one_b_z2,
+                             1+Po2(x)*one_b_z2 ,
+                             -y*one_b_z);
       J_frame[1]
-          = TooN::makeVector(0, 1./z, -y/z_2, -(1+Po2(y)/z_2), x*y/z_2, x/z);
+          = TooN::makeVector(0,
+                             one_b_z,
+                             -y*one_b_z2,
+                             -1-Po2(y)*one_b_z2,
+                             xy*one_b_z2,
+                             x*one_b_z);
 
-      return cam_pars.jacobian() * J_frame;
+      return cam.jacobian(project(xyz_trans))*J_frame;
 
     }
 
-    TooN::Matrix<2,3> pointJac(const TooN::SE3<> & T,
-                               const TooN::Vector<3> & xyz) const
+
+
+
+
+    TooN::Matrix<2,3> pointJacFromTransXYZ(const TooN::SE3<> & T,
+                                           const TooN::Vector<3> & xyz_trans) const
     {
 
       /**
         * Jacobians as described in Ethan Eade's Phd thesis:
         * http://mi.eng.cam.ac.uk/~ee231/thesis_revised.pdf , Appendix A
         */
-      TooN::Vector<3> xyz_trans = T.get_rotation()*xyz + T.get_translation();
 
+      const TooN::Matrix<3> & R = T.get_rotation().get_matrix();
       double x = xyz_trans[0];
       double y = xyz_trans[1];
       double z = xyz_trans[2];
 
-      TooN::Matrix<2,3> tmp;
-      tmp[0] = TooN::makeVector(1,0,-x/z);
-      tmp[1] = TooN::makeVector(0,1,-y/z);
+      double one_b_z = 1/z;
 
-      TooN::Matrix<2,3> J_x = 1./z * tmp * T.get_rotation();
+      double x_b_z = x*one_b_z;
+      double y_b_z = y*one_b_z;
 
-      return cam_pars.jacobian() * J_x;
+      double r20 = R(2,0);
+      double r21 = R(2,1);
+      double r22 = R(2,2);
+
+      TooN::Matrix<2,3> res;
+      res[0] = one_b_z*TooN::makeVector(R(0,0) - r20*x_b_z,
+                                        R(0,1) - r21*x_b_z,
+                                        R(0,2) - r22*x_b_z);
+      res[1] = one_b_z*TooN::makeVector(R(1,0) - r20*y_b_z,
+                                        R(1,1) - r21*y_b_z,
+                                        R(1,2) - r22*y_b_z);
+      return cam.jacobian(project(xyz_trans))*res;
+
     }
 
     TooN::Vector<3> add(const TooN::Vector<3> & x,
@@ -292,17 +380,25 @@ namespace RobotVision
     }
 
   private:
-    LinearCamera  cam_pars;
+    Intrinsics  cam;
 
   };
+
+  typedef AbstractSE3XYZ<LinearCamera> SE3XYZ;
+
+
 
 
   /** 3D inverse depth point class*/
   class SE3UVQ : public SE3_AbstractPoint<3, 3, 2>{
   public:
 
-    SE3UVQ (const LinearCamera & cam_pars)
+    SE3UVQ ()
+    {
 
+    }
+
+    SE3UVQ (const LinearCamera & cam_pars)
     {
       this->cam_pars = cam_pars;
     }
@@ -339,7 +435,7 @@ namespace RobotVision
       J_frame[1]
           = TooN::makeVector(0, 1./z, -y/z_2, -(1+Po2(y)/z_2), x*y/z_2, x/z);
 
-      return cam_pars.jacobian() * J_frame;
+      return cam_pars.jacobian(project(xyz_trans)) * J_frame;
 
     }
 
@@ -405,8 +501,9 @@ namespace RobotVision
 
   /** observation class with inverse uncertainty*/
   template <int ObsDim>
-      class IdObsLambda : public IdObs<ObsDim>{
-      public:
+      class IdObsLambda : public IdObs<ObsDim>
+  {
+  public:
     IdObsLambda(){}
     IdObsLambda(int point_id,
                 int frame_id,
@@ -417,6 +514,8 @@ namespace RobotVision
     }
     TooN::Matrix<2,2> lambda;
   };
+
+
 
 
   /** Abstract class for relative pose constraints between
